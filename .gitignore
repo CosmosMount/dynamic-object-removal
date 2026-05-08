@@ -1,0 +1,15 @@
+.vscode/
+videos/
+outputs/
+*__pycache__/
+inputs/
+figs/
+output_*/
+data/
+ckpts/
+*.pt
+*.pdf
+AGENTS.md
+PLAN.md
+TASK.md
+*.egg-info/
