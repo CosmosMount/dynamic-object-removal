@@ -229,6 +229,16 @@ def main() -> None:
     args = parse_args()
     args.repo_root = os.path.abspath(args.repo_root)
     args.trackanything_dir = os.path.abspath(args.trackanything_dir)
+    # Must resolve before os.chdir(Track-Anything): relative paths like data/DAVIS/...
+    # would otherwise be resolved against the wrong cwd and look "missing" (not deleted).
+    args.frame_dir = os.path.abspath(args.frame_dir)
+    args.raw_mask_dir = os.path.abspath(args.raw_mask_dir)
+    if args.binary_mask_dir:
+        args.binary_mask_dir = os.path.abspath(args.binary_mask_dir)
+    if args.vis_dir:
+        args.vis_dir = os.path.abspath(args.vis_dir)
+    if args.init_mask:
+        args.init_mask = os.path.abspath(args.init_mask)
 
     frame_paths = list_frames(args.frame_dir)
     first_rgb = read_rgb(frame_paths[0])

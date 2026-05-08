@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run_dir", required=True)
     p.add_argument("--frames_dir", required=True)
     p.add_argument("--masks_dir", required=True)
-    p.add_argument("--method", required=True, choices=["baseline_handcrafted", "propainter", "diffueraser", "sd_keyframe"])
+    p.add_argument("--method", required=True, choices=["baseline_handcrafted", "propainter", "diffueraser"])
     p.add_argument("--overwrite", action="store_true", default=False)
     return p
 

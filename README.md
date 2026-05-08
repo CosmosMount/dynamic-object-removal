@@ -62,6 +62,7 @@ Conda env names (as used in this repo/docs):
 - **diffueraser**: DiffuEraser inpainting
   - Used by: `inpaint=diffueraser`
   - Needs: `modules/DiffuEraser/requirements.txt` (pins `torch==2.3.1` / `diffusers==0.29.2` etc)
+  - Install **`ffmpeg`** (e.g. `/usr/bin/ffmpeg`): outputs are re-encoded to H.264 (yuv420p + faststart) so `diffueraser_result.mp4` plays in VS Code. `compare`’s `conda run` prepends `/usr/bin` to `PATH` so re-encode can find it; if re-encode still fails, check the stderr line printed by the inpaint step.
 - **trackanything**: Track-Anything tracker
   - Used by: `track=trackanything`
   - Needs: `modules/Track-Anything/requirements.txt` (+ checkpoints under `ckpts/trackanything/`)
@@ -124,6 +125,7 @@ Notes:
 - `yolosam2`: YOLO init → SAM2 track → ProPainter inpaint
 - `yoloopt`: YOLO init → optflow track → ProPainter inpaint
 - Env mapping is configured in `configs/env_map.json` (method → conda env). Override with `--env_map` if needed.
+  Empty string means “run in the same env as `compare`” for that stage (you must have that stage’s dependencies installed there).
 - Use `--env_policy force_single` to disable auto env switching (runs everything in current env).
 
 ### Run stages manually (per-stage CLI)

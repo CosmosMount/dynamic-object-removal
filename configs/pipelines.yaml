@@ -1,0 +1,79 @@
+# compare 读取：`python -m object_removal.cli.compare --pipelines_config configs/pipelines.yaml ...`
+# 与内置 pipeline 同名时会覆盖内置；可只维护本文件中的条目。
+#
+# 可选块：
+#   sam3: 仅当 track: sam3（默认与 object-removal/pipelines/vggt4dsam3_diffueraser.sh 一致；
+#         可覆盖 two_stage_auto_max_fg_frac / two_stage_auto_min_fg_frac / two_stage_auto_min_fg_pixels）
+#   vggt4d: 仅当 mask 为 vggt4d 或 vggt_framewise（如 max_frames_for_vggt、init_frame）
+
+pipelines:
+  baseline:
+    mask: baseline_yolo_motion
+    track: identity
+    inpaint: baseline_handcrafted
+
+  yolosam2:
+    mask: yolo_first
+    track: sam2
+    inpaint: propainter
+
+  yoloopt:
+    mask: yolo_first
+    track: optflow
+    inpaint: propainter
+
+  trackanything_diffueraser:
+    mask: yolo_first
+    track: trackanything
+    inpaint: diffueraser
+
+  vggt_trackanything_diffueraser:
+    mask: vggt4d
+    track: trackanything
+    inpaint: diffueraser
+
+  vggt4d:
+    mask: vggt_framewise
+    track: identity
+    inpaint: propainter
+
+  vggt_only_diffueraser:
+    mask: vggt_framewise
+    track: identity
+    inpaint: diffueraser
+
+  vggt4dsam3:
+    mask: vggt4d
+    track: sam3
+    inpaint: propainter
+    sam3:
+      two_stage_anchor_idx: auto
+      two_stage_auto_samples: 7
+      score_thresh: 0.0
+
+  vggt4dsam3_diffueraser:
+    mask: vggt4d
+    track: sam3
+    inpaint: diffueraser
+    sam3:
+      two_stage_anchor_idx: auto
+      two_stage_auto_samples: 7
+      score_thresh: 0.0
+
+  vggt_sam3_propainter:
+    mask: vggt4d
+    track: sam3
+    inpaint: propainter
+    sam3:
+      two_stage_anchor_idx: auto
+      two_stage_auto_samples: 7
+      score_thresh: 0.0
+
+  vggt_sam3_diffueraser:
+    mask: vggt4d
+    track: sam3
+    inpaint: diffueraser
+    sam3:
+      two_stage_anchor_idx: auto
+      two_stage_auto_samples: 7
+      score_thresh: 0.0

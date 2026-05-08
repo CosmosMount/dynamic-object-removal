@@ -1,5 +1,8 @@
 import argparse
+import os
+import urllib.request
 from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -20,9 +23,82 @@ device = torch.device("cuda") \
     if torch.cuda.is_available() \
     else torch.device("cpu")
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_VGGT_TRACKER_NAME = "model_tracker_fixed_e20.pt"
+_VGGT_TRACKER_HF_REPO = "facebook/VGGT_tracker_fixed"
+_VGGT_TRACKER_URL = (
+    "https://huggingface.co/facebook/VGGT_tracker_fixed/resolve/main/"
+    f"{_VGGT_TRACKER_NAME}"
+)
+
+
+def _scan_vggt4d_tracker_ckpt() -> Optional[Path]:
+    """Resolve checkpoint vs cwd (compare/conda often run from repo root)."""
+    cand = [
+        _REPO_ROOT / "ckpts" / "vggt4d" / _VGGT_TRACKER_NAME,
+        _REPO_ROOT / "ckpts" / _VGGT_TRACKER_NAME,
+        Path("ckpts/vggt4d") / _VGGT_TRACKER_NAME,
+        Path("ckpts") / _VGGT_TRACKER_NAME,
+    ]
+    for p in cand:
+        if p.is_file():
+            return p.resolve()
+    return None
+
+
+def _try_download_vggt4d_tracker_hf() -> bool:
+    if os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return False
+    dest_dir = _REPO_ROOT / "ckpts" / "vggt4d"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        hf_hub_download(
+            repo_id=_VGGT_TRACKER_HF_REPO,
+            filename=_VGGT_TRACKER_NAME,
+            local_dir=str(dest_dir),
+        )
+    except Exception as exc:
+        print(f"[VGGT4D] huggingface_hub download failed ({exc})")
+        return False
+    return (dest_dir / _VGGT_TRACKER_NAME).is_file()
+
+
+def _try_download_vggt4d_tracker_url() -> bool:
+    dest = _REPO_ROOT / "ckpts" / "vggt4d" / _VGGT_TRACKER_NAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(_VGGT_TRACKER_URL, str(dest))
+    except Exception as exc:
+        print(f"[VGGT4D] direct URL download failed ({exc})")
+        return False
+    return dest.is_file()
+
+
+def _ensure_vggt4d_tracker_ckpt() -> Path:
+    p = _scan_vggt4d_tracker_ckpt()
+    if p is not None:
+        return p
+    if _try_download_vggt4d_tracker_hf() or _try_download_vggt4d_tracker_url():
+        p = _scan_vggt4d_tracker_ckpt()
+        if p is not None:
+            return p
+    exp = _REPO_ROOT / "ckpts" / "vggt4d" / _VGGT_TRACKER_NAME
+    raise FileNotFoundError(
+        f"VGGT4D tracker checkpoint not found under {_REPO_ROOT}. "
+        f"Expected e.g. {exp}\n"
+        f"Install manually, e.g.:\n"
+        f'  wget -c "{_VGGT_TRACKER_URL}?download=true" -O {exp}\n'
+        f"Or install huggingface_hub and retry (auto-download uses {_VGGT_TRACKER_HF_REPO})."
+    )
+
+
 model = VGGTFor4D()
-model.load_state_dict(torch.load(
-    "./ckpts/model_tracker_fixed_e20.pt", weights_only=True))
+_ckpt = _ensure_vggt4d_tracker_ckpt()
+model.load_state_dict(torch.load(str(_ckpt), weights_only=True))
 model.eval()
 model = model.to(device)
 

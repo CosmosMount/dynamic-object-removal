@@ -2,6 +2,9 @@ import gc
 import copy
 import cv2
 import os
+from pathlib import Path
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
 import torchvision
@@ -22,6 +25,87 @@ from libs.unet_motion_model import MotionAdapter, UNetMotionModel
 from libs.brushnet_CA import BrushNetModel
 from libs.unet_2d_condition import UNet2DConditionModel
 from diffueraser.pipeline_diffueraser import StableDiffusionDiffuEraserPipeline
+
+
+PCM_WEIGHTS_HF_REPO = "wangfuyun/PCM_Weights"
+
+
+def _repo_root_here() -> Path:
+    # .../modules/DiffuEraser/diffueraser/diffueraser.py → parents[2] = repo root
+    return Path(__file__).resolve().parents[2]
+
+
+def _scan_pcm_weights(
+    mode: str, weight_filename: str
+) -> Optional[Tuple[Path, Optional[str]]]:
+    """Return (root_for_load_lora_weights, subfolder) or None. subfolder is mode, or None if flat layout."""
+    here = Path(__file__).resolve().parent
+    repo = _repo_root_here()
+    rel_sub = Path(mode) / weight_filename
+    candidates = [
+        repo / "ckpts" / "diffueraser" / "PCM_Weights",
+        repo / "ckpts" / "PCM_Weights",
+        here.parent / "weights" / "PCM_Weights",
+        here / "weights" / "PCM_Weights",
+    ]
+    for base in candidates:
+        if (base / rel_sub).is_file():
+            return base, mode
+        if (base / weight_filename).is_file():
+            return base, None
+    return None
+
+
+def _try_download_pcm_from_hub(mode: str, weight_filename: str) -> bool:
+    """Download PCM LoRA from Hugging Face into ckpts/diffueraser/PCM_Weights/ (one-time)."""
+    if os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return False
+    repo = _repo_root_here()
+    dest_root = repo / "ckpts" / "diffueraser" / "PCM_Weights"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    rel = f"{mode}/{weight_filename}"
+    try:
+        hf_hub_download(
+            repo_id=PCM_WEIGHTS_HF_REPO,
+            filename=rel,
+            local_dir=str(dest_root),
+        )
+    except Exception as exc:
+        print(f"[DiffuEraser] could not auto-download PCM from {PCM_WEIGHTS_HF_REPO} ({exc})")
+        return False
+    return (dest_root / rel).is_file()
+
+
+def _resolve_pcm_for_lora(mode: str, weight_filename: str) -> Tuple[Path, Optional[str]]:
+    found = _scan_pcm_weights(mode, weight_filename)
+    if found is not None:
+        return found
+    if _try_download_pcm_from_hub(mode, weight_filename):
+        found = _scan_pcm_weights(mode, weight_filename)
+        if found is not None:
+            return found
+    repo = _repo_root_here()
+    rel = Path(mode) / weight_filename
+    tried = "\n".join(
+        f"  - {b / rel} or {b / weight_filename}"
+        for b in [
+            repo / "ckpts" / "diffueraser" / "PCM_Weights",
+            repo / "ckpts" / "PCM_Weights",
+            Path(__file__).resolve().parent.parent / "weights" / "PCM_Weights",
+            Path(__file__).resolve().parent / "weights" / "PCM_Weights",
+        ]
+    )
+    raise FileNotFoundError(
+        f"PCM LoRA file missing: {mode}/{weight_filename}\n"
+        f"Either copy it under the repo (see tried paths below), or install huggingface_hub and allow download:\n"
+        f"  hf_hub_download(repo_id={PCM_WEIGHTS_HF_REPO!r}, filename={str(rel)!r}, ...)\n"
+        f"Expected after download: {repo / 'ckpts' / 'diffueraser' / 'PCM_Weights' / rel}\n"
+        f"Tried:\n{tried}"
+    )
 
 
 checkpoints = {
@@ -224,9 +308,15 @@ class DiffuEraser:
         PCM_ckpts = checkpoints[ckpt][0].format(mode)
         self.guidance_scale = checkpoints[ckpt][2]
         if loaded != (ckpt + mode):
-            self.pipeline.load_lora_weights(
-                "weights/PCM_Weights", weight_name=PCM_ckpts, subfolder=mode
-            )
+            pcm_root, pcm_sub = _resolve_pcm_for_lora(mode, PCM_ckpts)
+            lw_kw = {"weight_name": PCM_ckpts, "local_files_only": True}
+            if pcm_sub:
+                lw_kw["subfolder"] = pcm_sub
+            try:
+                self.pipeline.load_lora_weights(str(pcm_root), **lw_kw)
+            except TypeError:
+                lw_kw.pop("local_files_only", None)
+                self.pipeline.load_lora_weights(str(pcm_root), **lw_kw)
             loaded = ckpt + mode
 
             if ckpt == "LCM-Like LoRA":
@@ -421,7 +511,8 @@ class DiffuEraser:
                             default_fps, comp_frames[0].size)
         for f in range(real_video_length):
             img = np.array(comp_frames[f]).astype(np.uint8)
-            writer.write(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            # PIL / numpy are RGB; OpenCV VideoWriter expects BGR.
+            writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         writer.release()
         ################################
 

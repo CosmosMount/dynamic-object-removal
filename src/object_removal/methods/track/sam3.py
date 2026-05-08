@@ -10,6 +10,9 @@ class Params:
     checkpoint: Path
     two_stage_anchor_idx: str = "auto"  # "-1" | int | "auto"
     two_stage_auto_samples: int = 7
+    two_stage_auto_max_fg_frac: float = 0.92
+    two_stage_auto_min_fg_frac: float = 0.00008
+    two_stage_auto_min_fg_pixels: int = 64
     score_thresh: float = 0.0
 
 
@@ -22,21 +25,20 @@ def run(
     out_binary_dir: Path,
     params: Params,
 ) -> dict:
-    """Run SAM3 VOS based on the existing inference implementation.
-
-    This keeps the core logic identical by reusing the vendored implementation in
-    `src/object_removal/vendor/sam3_vos.py`. You are expected to run this inside a python env
-    where SAM3 + torch are installed and usable.
-    """
+    """Run SAM3 VOS (legacy two-stage) via `object_removal.vendor.sam3_vos`."""
     from object_removal.vendor import sam3_vos as mod
 
-    # Prepare minimal folder layout expected by legacy script:
-    # - base_video_dir contains <video_name>/00000.jpg ...
-    # - input_mask_dir contains <video_name>/00000.png (indexed init mask)
     video_name = frames_dir.name
     base_video_dir = frames_dir.parent
     if (base_video_dir / video_name) != frames_dir:
         raise ValueError("frames_dir must be a leaf directory named as the video/sequence (e.g. .../bmx-trees)")
+
+    # Vendor expects input_mask_dir/<video_name>/*.png (same layout as object-removal pipeline).
+    tmp_mask_root = out_raw_indexed_dir.parent / "tmp_sam3_init_masks"
+    tmp_video_mask_dir = tmp_mask_root / video_name
+    tmp_video_mask_dir.mkdir(parents=True, exist_ok=True)
+    for p in sorted(init_mask_dir.glob("*.png")):
+        (tmp_video_mask_dir / p.name).write_bytes(p.read_bytes())
 
     video_list = out_raw_indexed_dir.parent / "video_list.txt"
     video_list.parent.mkdir(parents=True, exist_ok=True)
@@ -45,23 +47,29 @@ def run(
     argv = [
         "sam3_vos.py",
         "--repo_root",
-        str(repo_root),
+        str(repo_root.resolve()),
         "--sam3_checkpoint",
         str(params.checkpoint),
         "--base_video_dir",
-        str(base_video_dir),
+        str(base_video_dir.resolve()),
         "--input_mask_dir",
-        str(init_mask_dir.parent),
+        str(tmp_mask_root.resolve()),
         "--video_list_file",
-        str(video_list),
+        str(video_list.resolve()),
         "--output_mask_dir",
-        str(out_raw_indexed_dir.parent),
+        str(out_raw_indexed_dir.parent.resolve()),
         "--score_thresh",
         str(params.score_thresh),
         "--two_stage_anchor_idx",
         str(params.two_stage_anchor_idx),
         "--two_stage_auto_samples",
         str(params.two_stage_auto_samples),
+        "--two_stage_auto_max_fg_frac",
+        str(params.two_stage_auto_max_fg_frac),
+        "--two_stage_auto_min_fg_frac",
+        str(params.two_stage_auto_min_fg_frac),
+        "--two_stage_auto_min_fg_pixels",
+        str(params.two_stage_auto_min_fg_pixels),
     ]
 
     old_argv = sys.argv
@@ -71,7 +79,6 @@ def run(
     finally:
         sys.argv = old_argv
 
-    # Convert indexed masks to canonical binary
     from object_removal.io.masks import list_mask_files, read_mask_u8, to_binary_255, write_mask_u8
 
     raw_seq_dir = out_raw_indexed_dir.parent / video_name
@@ -98,6 +105,10 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--two_stage_anchor_idx", default="auto")
     ap.add_argument("--two_stage_auto_samples", type=int, default=7)
+    ap.add_argument("--two_stage_auto_max_fg_frac", type=float, default=0.92)
+    ap.add_argument("--two_stage_auto_min_fg_frac", type=float, default=0.00008)
+    ap.add_argument("--two_stage_auto_min_fg_pixels", type=int, default=64)
+    ap.add_argument("--score_thresh", type=float, default=0.0)
     args = ap.parse_args()
 
     run(
@@ -110,10 +121,13 @@ def main() -> None:
             checkpoint=Path(args.checkpoint),
             two_stage_anchor_idx=str(args.two_stage_anchor_idx),
             two_stage_auto_samples=int(args.two_stage_auto_samples),
+            two_stage_auto_max_fg_frac=float(args.two_stage_auto_max_fg_frac),
+            two_stage_auto_min_fg_frac=float(args.two_stage_auto_min_fg_frac),
+            two_stage_auto_min_fg_pixels=int(args.two_stage_auto_min_fg_pixels),
+            score_thresh=float(args.score_thresh),
         ),
     )
 
 
 if __name__ == "__main__":
     main()
-

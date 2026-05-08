@@ -4,9 +4,9 @@ from pathlib import Path
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
-from object_removal.methods.inpaint import handcrafted, propainter, diffueraser, sd
+from object_removal.methods.inpaint import handcrafted, propainter, diffueraser
 from object_removal.methods.inpaint.handcrafted import BaselineInpaintParams
-from object_removal.utils.video import frames_to_mp4, masks_to_mp4, mp4_to_frames
+from object_removal.utils.video import frames_to_mp4, masks_to_mp4, mp4_to_frames, reencode_mp4_h264_inplace
 
 
 def run_inpaint_stage(
@@ -21,6 +21,10 @@ def run_inpaint_stage(
     ensure_layout_dirs(layout)
 
     out_dir = layout.inpaint_frames_dir
+    # Stale PNGs from a longer previous run break frame–GT alignment and metrics; clear before re-inpaint.
+    if overwrite and out_dir.is_dir():
+        for p in list(out_dir.glob("*.png")):
+            p.unlink(missing_ok=True)
     existing = list(out_dir.glob("*.png"))
     if existing and not overwrite:
         return out_dir
@@ -55,6 +59,8 @@ def run_inpaint_stage(
         input_mask = tmp / "input_mask.mp4"
         frames_to_mp4(frames_dir, input_video, fps=24.0)
         masks_to_mp4(masks_dir, input_mask, fps=24.0)
+        reencode_mp4_h264_inplace(input_video)
+        reencode_mp4_h264_inplace(input_mask)
         repo_root = Path.cwd()
         # Keep all DiffuEraser weights under repo_root/ckpts/diffueraser/weights/...
         w = repo_root / "ckpts" / "diffueraser" / "weights"
@@ -68,13 +74,6 @@ def run_inpaint_stage(
         # extract frames to canonical
         out_dir.mkdir(parents=True, exist_ok=True)
         mp4_to_frames(Path(meta["output_video"]), out_dir, ext=".png")
-        write_method_manifest(layout.inpaint_dir, stage="inpaint", method=method, params=meta)
-        return out_dir
-
-    if method == "sd_keyframe":
-        tmp = layout.inpaint_dir / "sd_keyframe"
-        tmp.mkdir(parents=True, exist_ok=True)
-        meta = sd.run(repo_root=Path.cwd(), frames_dir=frames_dir, masks_dir=masks_dir, out_frames_dir=out_dir, params=sd.Params())
         write_method_manifest(layout.inpaint_dir, stage="inpaint", method=method, params=meta)
         return out_dir
 

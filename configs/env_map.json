@@ -15,7 +15,6 @@
   "inpaint": {
     "propainter": "propainter",
     "diffueraser": "diffueraser",
-    "sd_keyframe": "",
     "baseline_handcrafted": ""
   },
   "eval": {

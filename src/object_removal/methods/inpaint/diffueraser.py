@@ -4,6 +4,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from object_removal.utils.video import reencode_mp4_h264_inplace
+
 
 @dataclass(frozen=True)
 class Params:
@@ -92,6 +94,11 @@ def run(
     out_video = out_dir / "diffueraser_result.mp4"
     if not out_video.is_file():
         raise FileNotFoundError(f"DiffuEraser output video not found: {out_video}")
+    # OpenCV mp4v is poorly supported in VS Code / Chromium; re-encode when ffmpeg is available.
+    priori = out_dir / "priori.mp4"
+    reencode_mp4_h264_inplace(out_video)
+    if priori.is_file():
+        reencode_mp4_h264_inplace(priori)
     return {"output_video": str(out_video)}
 
 

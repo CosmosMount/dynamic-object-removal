@@ -3,7 +3,6 @@ from tqdm import tqdm
 
 from tools.interact_tools import SamControler
 from tracker.base_tracker import BaseTracker
-from inpainter.base_inpainter import BaseInpainter
 import numpy as np
 import argparse
 
@@ -17,7 +16,13 @@ class TrackingAnything():
         self.e2fgvi_checkpoint = e2fgvi_checkpoint
         self.samcontroler = SamControler(self.sam_checkpoint, args.sam_model_type, args.device)
         self.xmem = BaseTracker(self.xmem_checkpoint, device=args.device)
-        self.baseinpainter = BaseInpainter(self.e2fgvi_checkpoint, args.device) 
+        # Mask-only / XMem paths do not need E2FGVI (avoids mmcv and heavy inpainter deps).
+        self.baseinpainter = None
+        ckpt = (e2fgvi_checkpoint or "").strip()
+        if ckpt:
+            from inpainter.base_inpainter import BaseInpainter
+
+            self.baseinpainter = BaseInpainter(ckpt, args.device)
     # def inference_step(self, first_flag: bool, interact_flag: bool, image: np.ndarray, 
     #                    same_image_flag: bool, points:np.ndarray, labels: np.ndarray, logits: np.ndarray=None, multimask=True):
     #     if first_flag:

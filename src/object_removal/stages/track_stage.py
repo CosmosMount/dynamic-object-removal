@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
@@ -15,11 +16,17 @@ def run_track_stage(
     in_masks_dir: Path,
     method: str,
     overwrite: bool = False,
+    sam3_options: Optional[Dict[str, Any]] = None,
+    repo_root: Optional[Path] = None,
 ) -> Path:
     layout = RunLayout(run_dir)
+    root = (repo_root or Path.cwd()).resolve()
     ensure_layout_dirs(layout)
 
     out_dir = layout.track_masks_binary_dir
+    if overwrite and out_dir.is_dir():
+        for p in list(out_dir.glob("*.png")):
+            p.unlink(missing_ok=True)
     existing = list(out_dir.glob("*.png"))
     if existing and not overwrite:
         return out_dir
@@ -31,13 +38,26 @@ def run_track_stage(
 
     if method == "sam3":
         raw_root = layout.track_dir / "masks_indexed_raw"
+        s3 = sam3_options or {}
+        ckpt_raw = str(s3.get("checkpoint", "ckpts/sam3/sam3.pt"))
+        ckpt_path = Path(ckpt_raw)
+        if not ckpt_path.is_absolute():
+            ckpt_path = (root / ckpt_path).resolve()
         meta = sam3.run(
-            repo_root=Path.cwd(),
+            repo_root=root,
             frames_dir=frames_dir,
             init_mask_dir=in_masks_dir,
             out_raw_indexed_dir=raw_root,
             out_binary_dir=out_dir,
-            params=sam3.Params(checkpoint=Path("ckpts/sam3/sam3.pt")),
+            params=sam3.Params(
+                checkpoint=ckpt_path,
+                two_stage_anchor_idx=str(s3.get("two_stage_anchor_idx", "auto")),
+                two_stage_auto_samples=int(s3.get("two_stage_auto_samples", 7)),
+                two_stage_auto_max_fg_frac=float(s3.get("two_stage_auto_max_fg_frac", 0.92)),
+                two_stage_auto_min_fg_frac=float(s3.get("two_stage_auto_min_fg_frac", 0.00008)),
+                two_stage_auto_min_fg_pixels=int(s3.get("two_stage_auto_min_fg_pixels", 64)),
+                score_thresh=float(s3.get("score_thresh", 0.0)),
+            ),
         )
         write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
         return out_dir
@@ -64,7 +84,7 @@ def run_track_stage(
         video_list.write_text(video_name + "\n", encoding="utf-8")
 
         meta = sam2.run(
-            repo_root=Path.cwd(),
+            repo_root=root,
             base_video_dir=tmp_base,
             input_mask_dir=tmp_in_masks.parent,
             video_list_file=video_list,
@@ -103,7 +123,7 @@ def run_track_stage(
 
     if method == "trackanything":
         meta = trackanything.run(
-            repo_root=Path.cwd(),
+            repo_root=root,
             frames_dir=frames_dir,
             out_binary_dir=out_dir,
             params=trackanything.Params(),
