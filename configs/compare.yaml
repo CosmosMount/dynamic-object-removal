@@ -9,13 +9,14 @@
 # overwrite: 是否覆盖已有阶段输出
 # part_label, conda_exe, env_map, env_policy: 与原先 CLI 一致
 
-task: davis:bmx-trees
+task: davis:tennis
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
-pipelines:
-  - vggt4d_sam3_diffueraser
-  - vggt4d_sam3_propainter
-overwrite: true
+# pipelines:
+#   - vggt4d_sam3_diffueraser
+#   - vggt4d_sam3_propainter
+run_all_pipelines: true
+overwrite: false
 
 # 不设 out_root 时默认为 outputs/compare/bmx-trees
 # out_root: outputs/compare/bmx-trees-all

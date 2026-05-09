@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import subprocess
@@ -66,15 +65,11 @@ def _load_metrics_row(path: Path, method_name: str) -> Dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return {
         "method": method_name,
-        "part_label": data.get("part_label", ""),
         "experiment_name": data.get("experiment_name", ""),
         "mask_jm": _safe_float(data.get("mask_jm")),
         "mask_jr": _safe_float(data.get("mask_jr")),
         "video_psnr": _safe_float(data.get("video_psnr")),
         "video_ssim": _safe_float(data.get("video_ssim")),
-        "mask_source": data.get("mask_source", ""),
-        "video_source": data.get("video_source", ""),
-        "metrics_path": str(path),
     }
 
 
@@ -83,15 +78,11 @@ def _write_combined(rows: List[Dict[str, Any]], out_csv: Path, out_md: Path) -> 
 
     columns = [
         "method",
-        "part_label",
         "experiment_name",
         "mask_jm",
         "mask_jr",
         "video_psnr",
         "video_ssim",
-        "mask_source",
-        "video_source",
-        "metrics_path",
     ]
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -109,63 +100,12 @@ def _write_combined(rows: List[Dict[str, Any]], out_csv: Path, out_md: Path) -> 
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# 内置默认；`configs/pipelines.yaml` 中同名会覆盖，亦可新增 id。
-_PIPELINES_BUILTIN: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = {
-    # clean-slate MVP
-    "baseline": {
-        "mask": "baseline_yolo_motion",
-        "track": "identity",
-        "inpaint": "baseline_handcrafted",
-    }
-    ,
-    "yolosam2": {
-        "mask": "yolo_first",
-        "track": "sam2",
-        "inpaint": "propainter",
-    },
-    "yoloopt": {
-        "mask": "yolo_first",
-        "track": "optflow",
-        "inpaint": "propainter",
-    },
-    "trackanything_diffueraser": {
-        "mask": "yolo_first",
-        "track": "trackanything",
-        "inpaint": "diffueraser",
-    },
-    "vggt_trackanything_diffueraser": {
-        "mask": "vggt4d",
-        "track": "trackanything",
-        "inpaint": "diffueraser",
-    },
-    "vggt4d": {
-        "mask": "vggt_framewise",
-        "track": "identity",
-        "inpaint": "propainter",
-    },
-    "vggt_only_diffueraser": {
-        "mask": "vggt_framewise",
-        "track": "identity",
-        "inpaint": "diffueraser",
-    },
-    "vggt4dsam3": {
-        "mask": "vggt4d",
-        "track": "sam3",
-        "inpaint": "propainter",
-        "sam3": {"two_stage_anchor_idx": "auto", "two_stage_auto_samples": 7, "score_thresh": 0.0},
-    },
-    "vggt4dsam3_diffueraser": {
-        "mask": "vggt4d",
-        "track": "sam3",
-        "inpaint": "diffueraser",
-        "sam3": {"two_stage_anchor_idx": "auto", "two_stage_auto_samples": 7, "score_thresh": 0.0},
-    },
-}
-
-
 def _load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
     if not path.is_file():
-        return {}
+        raise FileNotFoundError(
+            "pipelines config not found. Provide --pipelines_config or set `pipelines_config:` in compare YAML. "
+            f"Tried: {path}"
+        )
     try:
         import yaml  # type: ignore
     except Exception as exc:  # pragma: no cover
@@ -195,11 +135,9 @@ def _load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def build_pipeline_registry(config_path: Path) -> Dict[str, Dict[str, Union[str, Dict[str, Any]]]]:
-    """Deep-copy builtin registry, then apply YAML `pipelines:` (override / add)."""
-    reg: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = copy.deepcopy(_PIPELINES_BUILTIN)
-    reg.update(_load_pipelines_yaml(config_path))
-    return reg
+def build_pipeline_registry(config_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load pipeline registry only from YAML `pipelines:`."""
+    return _load_pipelines_yaml(config_path)
 
 
 def _load_compare_yaml(path: Path) -> Dict[str, Any]:
@@ -416,7 +354,10 @@ def main() -> None:
     elif isinstance(cfg.get("pipelines"), list) and cfg["pipelines"]:
         pipeline_ids = [str(x).strip() for x in cfg["pipelines"] if str(x).strip()]
     else:
-        pipeline_ids = ["baseline"] if "baseline" in registry else [sorted(registry.keys())[0]]
+        raise SystemExit(
+            "compare: missing pipeline ids. Pass --pipelines, or set `pipelines:` in compare YAML, or use --all. "
+            f"(pipelines config: {pipelines_config_path})"
+        )
 
     for pid in pipeline_ids:
         if pid not in registry:
