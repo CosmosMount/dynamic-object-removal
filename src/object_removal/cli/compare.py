@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.mask_vis import export_mask_overlay_video
@@ -19,33 +19,7 @@ from object_removal.stages.inpaint_stage import run_inpaint_stage
 from object_removal.stages.mask_stage import run_mask_stage
 from object_removal.stages.track_stage import run_track_stage
 from object_removal.stages.eval_stage import EvalInputs, run_eval, write_zero_eval_summary
-
-
-def _count_rgb_frames(frames_dir: Path) -> int:
-    return sum(
-        1
-        for p in frames_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    )
-
-
-def _resolve_davis_paths(davis_root: Path, seq: str) -> Tuple[Path, Path]:
-    frames_dir = davis_root / "JPEGImages" / "480p" / seq
-    if not frames_dir.is_dir():
-        raise FileNotFoundError(f"DAVIS frames dir not found: {frames_dir}")
-    n_frames = _count_rgb_frames(frames_dir)
-    if n_frames == 0:
-        raise FileNotFoundError(
-            f"No JPEG/PNG frames under {frames_dir} (folder exists but is empty). "
-            "Unpack DAVIS JPEGImages for this sequence."
-        )
-
-    gt1 = davis_root / "Annotations_unsupervised" / "480p" / seq
-    gt2 = davis_root / "Annotations" / "480p" / seq
-    gt_dir = gt1 if gt1.is_dir() else gt2
-    if not gt_dir.is_dir():
-        raise FileNotFoundError(f"DAVIS GT mask dir not found: tried {gt1} and {gt2}")
-    return frames_dir, gt_dir
+from object_removal.io.compare_run import CompareRunContext, env_for, load_pipelines_yaml, resolve_compare_context
 
 
 def _safe_float(v: Any):
@@ -72,11 +46,15 @@ def _load_metrics_row(path: Path, method_name: str) -> Dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return {
         "method": method_name,
-        "experiment_name": data.get("experiment_name", ""),
         "mask_jm": _safe_float(data.get("mask_jm")),
         "mask_jr": _safe_float(data.get("mask_jr")),
-        "video_psnr": _safe_float(data.get("video_psnr")),
-        "video_ssim": _safe_float(data.get("video_ssim")),
+        "mask_fm": _safe_float(data.get("mask_fm")),
+        "mask_fr": _safe_float(data.get("mask_fr")),
+        "mask_score": _safe_float(data.get("mask_score")),
+        "bg_l1_mean": _safe_float(data.get("bg_l1_mean")),
+        "temporal_warp_error_mean": _safe_float(data.get("temporal_warp_error_mean")),
+        "temporal_warp_error_hole_mean": _safe_float(data.get("temporal_warp_error_hole_mean")),
+        "laplacian_var_mean": _safe_float(data.get("laplacian_var_mean")),
     }
 
 
@@ -85,11 +63,15 @@ def _write_combined(rows: List[Dict[str, Any]], out_csv: Path, out_md: Path) -> 
 
     columns = [
         "method",
-        "experiment_name",
         "mask_jm",
         "mask_jr",
-        "video_psnr",
-        "video_ssim",
+        "mask_fm",
+        "mask_fr",
+        "mask_score",
+        "bg_l1_mean",
+        "temporal_warp_error_mean",
+        "temporal_warp_error_hole_mean",
+        "laplacian_var_mean",
     ]
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -107,90 +89,9 @@ def _write_combined(rows: List[Dict[str, Any]], out_csv: Path, out_md: Path) -> 
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
-    if not path.is_file():
-        raise FileNotFoundError(
-            "pipelines config not found. Provide --pipelines_config or set `pipelines_config:` in compare YAML. "
-            f"Tried: {path}"
-        )
-    try:
-        import yaml  # type: ignore
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError("PyYAML is required for --pipelines_config. Install: pip install pyyaml") from exc
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid pipelines YAML (expected mapping at root): {path}")
-    pls = data.get("pipelines")
-    if not isinstance(pls, dict) or not pls:
-        raise ValueError(f"Invalid pipelines YAML (missing non-empty `pipelines:`): {path}")
-    out: Dict[str, Dict[str, Any]] = {}
-    for pid, spec in pls.items():
-        if not isinstance(spec, dict):
-            raise ValueError(f"Invalid pipeline spec for {pid!r} in {path}")
-        for k in ("mask", "track", "inpaint"):
-            if k not in spec or not isinstance(spec[k], str) or not spec[k].strip():
-                raise ValueError(f"Pipeline {pid!r} missing string field {k!r} in {path}")
-        if "sam3" in spec and spec["sam3"] is not None and not isinstance(spec["sam3"], dict):
-            raise ValueError(f"Pipeline {pid!r} field `sam3` must be a mapping or omitted in {path}")
-        if "vggt4d" in spec and spec["vggt4d"] is not None and not isinstance(spec["vggt4d"], dict):
-            raise ValueError(f"Pipeline {pid!r} field `vggt4d` must be a mapping or omitted in {path}")
-        if "diffueraser" in spec and spec["diffueraser"] is not None and not isinstance(spec["diffueraser"], dict):
-            raise ValueError(f"Pipeline {pid!r} field `diffueraser` must be a mapping or omitted in {path}")
-        if "propainter" in spec and spec["propainter"] is not None and not isinstance(spec["propainter"], dict):
-            raise ValueError(f"Pipeline {pid!r} field `propainter` must be a mapping or omitted in {path}")
-        out[str(pid)] = dict(spec)
-    return out
-
-
 def build_pipeline_registry(config_path: Path) -> Dict[str, Dict[str, Any]]:
     """Load pipeline registry only from YAML `pipelines:`."""
-    return _load_pipelines_yaml(config_path)
-
-
-def _load_compare_yaml(path: Path) -> Dict[str, Any]:
-    """Optional run config (task, pipelines, out_root, …). Empty dict if file missing."""
-    if not path.is_file():
-        return {}
-    try:
-        import yaml  # type: ignore
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError("PyYAML is required for compare config YAML. Install: pip install pyyaml") from exc
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid compare config (expected mapping at root): {path}")
-    return dict(data)
-
-
-def _default_out_root_for_task(task: str, *, repo_root: Path) -> Path:
-    """davis:SEQ -> outputs/compare/SEQ (relative to repo root)."""
-    if task.startswith("davis:"):
-        seq = task.split(":", 1)[1].strip()
-        if not seq:
-            raise ValueError(f"Invalid task (empty seq): {task!r}")
-        return (repo_root / "outputs" / "compare" / seq).resolve()
-    raise ValueError(f"Cannot derive default out_root for task: {task!r} (only davis:SEQ supported)")
-
-
-def _load_env_map(path: Path) -> Dict[str, Dict[str, str]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid env map (expected dict): {path}")
-    out: Dict[str, Dict[str, str]] = {}
-    for stage in ("mask", "track", "inpaint", "eval"):
-        v = data.get(stage, {})
-        if not isinstance(v, dict):
-            raise ValueError(f"Invalid env map for stage={stage}: {path}")
-        out[stage] = {str(k): str(vv) for k, vv in v.items()}
-    return out
-
-
-def _env_for(env_map: Dict[str, Dict[str, str]], *, stage: str, method: str) -> str:
-    stage_map = env_map.get(stage, {})
-    if stage == "eval":
-        return str(stage_map.get(method, stage_map.get("default", "")) or "")
-    return str(stage_map.get(method, "") or "")
+    return load_pipelines_yaml(config_path)
 
 
 def _run_stage_via_conda_run(*, conda_exe: str, env_name: str, module: str, argv: List[str], cwd: Path) -> None:
@@ -298,7 +199,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="After track, write track/mask_vis.mp4 (also set export_mask_vis in compare YAML).",
     )
+    p.add_argument(
+        "--only-stage",
+        default=None,
+        choices=["mask", "track", "inpaint", "eval"],
+        help="Run only this stage (requires exactly one pipeline). Overrides YAML only_stage when set.",
+    )
     return p
+
+
+def _collect_required_envs(ctx: CompareRunContext) -> List[str]:
+    """Conda env names required for the selected only_stage (or full pipeline)."""
+    req: List[str] = []
+    st = ctx.only_stage
+    for name in ctx.pipeline_ids:
+        spec = ctx.registry[name]
+        if st is None or st == "mask":
+            req.append(env_for(ctx.env_map, stage="mask", method=str(spec["mask"])))
+        if st is None or st == "track":
+            req.append(env_for(ctx.env_map, stage="track", method=str(spec["track"])))
+        if st is None or st == "inpaint":
+            req.append(env_for(ctx.env_map, stage="inpaint", method=str(spec["inpaint"])))
+        if st is None or st == "eval":
+            req.append(env_for(ctx.env_map, stage="eval", method="internal"))
+    return req
 
 
 def main() -> None:
@@ -308,112 +232,56 @@ def main() -> None:
     compare_cfg_path = Path(args.config)
     if not compare_cfg_path.is_absolute():
         compare_cfg_path = (repo_root / compare_cfg_path).resolve()
-    cfg = _load_compare_yaml(compare_cfg_path)
-
-    def _cfg_str(key: str, default: str = "") -> str:
-        v = cfg.get(key)
-        if v is None:
-            return default
-        return str(v).strip()
-
-    task = (args.task if args.task is not None else _cfg_str("task", "")).strip()
-    if not task:
-        raise SystemExit(
-            "compare: missing `task`. Set `task:` in configs/compare.yaml (or pass --config / --task). "
-            f"Tried config file: {compare_cfg_path}"
+    try:
+        ctx = resolve_compare_context(
+            repo_root=repo_root,
+            compare_cfg_path=compare_cfg_path,
+            task=args.task,
+            davis_root=args.davis_root,
+            pipelines_config=args.pipelines_config,
+            pipelines_arg=args.pipelines,
+            run_all_pipelines=bool(args.all),
+            out_root=args.out_root,
+            part_label=args.part_label,
+            overwrite_cli=bool(args.overwrite),
+            conda_exe=args.conda_exe,
+            env_map_path=args.env_map,
+            env_policy=args.env_policy,
+            export_mask_vis_cli=bool(args.export_mask_vis),
+            only_stage_cli=args.only_stage,
         )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
-    davis_root_arg = args.davis_root if args.davis_root is not None else _cfg_str("davis_root", "data/DAVIS")
-    if not davis_root_arg:
-        davis_root_arg = "data/DAVIS"
-    davis_root = Path(davis_root_arg)
-    if not davis_root.is_absolute():
-        davis_root = (repo_root / davis_root).resolve()
-
-    pc_raw = args.pipelines_config if args.pipelines_config is not None else cfg.get("pipelines_config")
-    if not pc_raw:
-        pc_raw = "configs/pipelines.yaml"
-    pipelines_config_path = Path(str(pc_raw).strip())
-    if not pipelines_config_path.is_absolute():
-        pipelines_config_path = (repo_root / pipelines_config_path).resolve()
-
-    env_map_raw = args.env_map if args.env_map is not None else cfg.get("env_map", "configs/env_map.json")
-    env_map_path = Path(str(env_map_raw).strip())
-    if not env_map_path.is_absolute():
-        env_map_path = (repo_root / env_map_path).resolve()
-    env_map = _load_env_map(env_map_path)
-
-    conda_exe = str(args.conda_exe if args.conda_exe is not None else cfg.get("conda_exe", "conda") or "conda")
-    env_policy = str(args.env_policy if args.env_policy is not None else cfg.get("env_policy", "auto") or "auto")
-    overwrite = bool(cfg.get("overwrite", False)) or bool(args.overwrite)
-    part_label = str(args.part_label if args.part_label is not None else cfg.get("part_label", "") or "")
-    export_mask_vis = bool(cfg.get("export_mask_vis", False)) or bool(args.export_mask_vis)
-    mask_vis_fps = float(cfg.get("mask_vis_fps", 10.0) or 10.0)
-    mask_vis_alpha = float(cfg.get("mask_vis_alpha", 0.5) or 0.5)
-
-    registry = build_pipeline_registry(pipelines_config_path)
-
-    if bool(args.all):
-        pipeline_ids = sorted(registry.keys())
-    elif args.pipelines is not None:
-        pipeline_ids = [str(x).strip() for x in args.pipelines if str(x).strip()]
-        if not pipeline_ids:
-            py = cfg.get("pipelines")
-            if isinstance(py, list) and py:
-                pipeline_ids = [str(x).strip() for x in py if str(x).strip()]
-            if not pipeline_ids:
-                raise SystemExit(
-                    "compare: empty pipeline list (--pipelines with no ids, and no non-empty `pipelines:` in YAML)."
-                )
-    elif bool(cfg.get("run_all_pipelines", False)):
-        pipeline_ids = sorted(registry.keys())
-    elif isinstance(cfg.get("pipelines"), list) and cfg["pipelines"]:
-        pipeline_ids = [str(x).strip() for x in cfg["pipelines"] if str(x).strip()]
-    else:
-        raise SystemExit(
-            "compare: missing pipeline ids. Pass --pipelines, or set `pipelines:` in compare YAML, or use --all. "
-            f"(pipelines config: {pipelines_config_path})"
-        )
-
-    for pid in pipeline_ids:
-        if pid not in registry:
-            raise ValueError(
-                f"Unknown pipeline id {pid!r}. Known: {sorted(registry.keys())} "
-                f"(config: {pipelines_config_path})"
-            )
+    cfg = ctx.cfg
+    task = ctx.task
+    davis_root = ctx.davis_root
+    pipelines_config_path = ctx.pipelines_config_path
+    env_map = ctx.env_map
+    conda_exe = ctx.conda_exe
+    env_policy = ctx.env_policy
+    overwrite = ctx.overwrite
+    part_label = ctx.part_label
+    export_mask_vis = ctx.export_mask_vis
+    mask_vis_fps = ctx.mask_vis_fps
+    mask_vis_alpha = ctx.mask_vis_alpha
+    registry = ctx.registry
+    pipeline_ids = ctx.pipeline_ids
+    out_root = ctx.out_root
+    runs_root = ctx.runs_root
+    summary_root = ctx.summary_root
+    meta_root = ctx.meta_root
+    frames_dir = ctx.frames_dir
+    gt_mask_dir = ctx.gt_mask_dir
+    gt_frames_dir = ctx.gt_frames_dir
+    only = ctx.only_stage
 
     if env_policy != "force_single":
-        required_envs: List[str] = []
-        for name in pipeline_ids:
-            spec = registry.get(name)
-            if spec is None:
-                continue
-            required_envs.append(_env_for(env_map, stage="mask", method=str(spec["mask"])))
-            required_envs.append(_env_for(env_map, stage="track", method=str(spec["track"])))
-            required_envs.append(_env_for(env_map, stage="inpaint", method=str(spec["inpaint"])))
-        _require_envs(conda_exe, required_envs)
+        _require_envs(conda_exe, _collect_required_envs(ctx))
 
-    out_raw = args.out_root if args.out_root is not None else cfg.get("out_root")
-    if out_raw is None or (isinstance(out_raw, str) and not str(out_raw).strip()):
-        out_root = _default_out_root_for_task(task, repo_root=repo_root)
-    else:
-        out_root = Path(str(out_raw).strip())
-        if not out_root.is_absolute():
-            out_root = (repo_root / out_root).resolve()
-
-    runs_root = out_root / "runs"
-    summary_root = out_root / "summary"
-    meta_root = out_root / "meta"
     meta_root.mkdir(parents=True, exist_ok=True)
-
-    if task.startswith("davis:"):
-        seq = task.split(":", 1)[1]
-        frames_dir, gt_mask_dir = _resolve_davis_paths(davis_root, seq)
-        gt_frames_dir = frames_dir
-        task_meta = {"type": "davis", "seq": seq, "davis_root": str(davis_root)}
-    else:
-        raise ValueError("Only davis:SEQ is supported in MVP compare runner.")
-
+    seq = task.split(":", 1)[1]
+    task_meta = {"type": "davis", "seq": seq, "davis_root": str(davis_root)}
     (meta_root / "task.json").write_text(json.dumps(task_meta, indent=2), encoding="utf-8")
     (meta_root / "compare_run.json").write_text(
         json.dumps(
@@ -428,8 +296,9 @@ def main() -> None:
                 "overwrite": overwrite,
                 "part_label": part_label,
                 "conda_exe": conda_exe,
-                "env_map": str(env_map_path),
+                "env_map": str(ctx.env_map_path),
                 "env_policy": env_policy,
+                "only_stage": only,
             },
             indent=2,
         ),
@@ -485,73 +354,36 @@ def main() -> None:
                 base_s3.update(raw_s3)
             sam3_opts = base_s3
 
-        mask_env = _env_for(env_map, stage="mask", method=mask_method)
-        track_env = _env_for(env_map, stage="track", method=track_method)
-        inpaint_env = _env_for(env_map, stage="inpaint", method=inpaint_method)
+        mask_env = env_for(env_map, stage="mask", method=mask_method)
+        track_env = env_for(env_map, stage="track", method=track_method)
+        inpaint_env = env_for(env_map, stage="inpaint", method=inpaint_method)
+
+        if only == "eval":
+            track_masks_dir = layout.track_masks_binary_dir
+            inpaint_frames_dir = layout.inpaint_frames_dir
+            summary = run_eval(
+                EvalInputs(
+                    output_dir=layout.eval_dir,
+                    part_label=part_label,
+                    experiment_name=name,
+                    pred_mask_dir=track_masks_dir,
+                    gt_mask_dir=gt_mask_dir,
+                    pred_frames_dir=inpaint_frames_dir,
+                    gt_frames_dir=None,
+                    source_frames_dir=frames_dir,
+                    merge_gt_objects=True,
+                    video_metric_impl="internal",
+                )
+            )
+            rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
+            print(
+                f"[compare] done: {name} (only_stage=eval) mask_score={summary.get('mask_score')}"
+            )
+            continue
 
         if env_policy == "force_single":
-            init_masks_dir = run_mask_stage(
-                run_dir=run_dir,
-                frames_dir=frames_dir,
-                method=mask_method,
-                overwrite=overwrite,
-                vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
-                repo_root=repo_root,
-            )
-            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
-                frames_dir, init_masks_dir, track_method
-            ):
-                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
-                summary = write_zero_eval_summary(
-                    layout.eval_dir,
-                    experiment_name=name,
-                    part_label=part_label,
-                )
-                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-                print(f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} psnr={summary.get('video_psnr')}")
-                continue
-            track_masks_dir = run_track_stage(
-                run_dir=run_dir,
-                frames_dir=frames_dir,
-                in_masks_dir=init_masks_dir,
-                method=track_method,
-                overwrite=overwrite,
-                sam3_options=sam3_opts if track_method == "sam3" else None,
-                repo_root=repo_root,
-            )
-            inpaint_frames_dir = run_inpaint_stage(
-                run_dir=run_dir,
-                frames_dir=frames_dir,
-                masks_dir=track_masks_dir,
-                method=inpaint_method,
-                overwrite=overwrite,
-                diffueraser_options=diffueraser_opts,
-                propainter_options=propainter_opts,
-            )
-        else:
-            if mask_env:
-                mask_argv = [
-                    "--run_dir",
-                    str(run_dir),
-                    "--frames_dir",
-                    str(frames_dir),
-                    "--method",
-                    mask_method,
-                    "--repo_root",
-                    str(repo_root),
-                    *([] if not overwrite else ["--overwrite"]),
-                ]
-                if vggt4d_opts:
-                    mask_argv += mask_argv_from_vggt_opts(vggt4d_opts, mask_method=mask_method)
-                _run_stage_via_conda_run(
-                    conda_exe=conda_exe,
-                    env_name=mask_env,
-                    module="object_removal.cli.mask",
-                    argv=mask_argv,
-                    cwd=repo_root,
-                )
-            else:
-                run_mask_stage(
+            if only is None or only == "mask":
+                init_masks_dir = run_mask_stage(
                     run_dir=run_dir,
                     frames_dir=frames_dir,
                     method=mask_method,
@@ -559,7 +391,12 @@ def main() -> None:
                     vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
                     repo_root=repo_root,
                 )
-            init_masks_dir = layout.mask_init_masks_dir
+            else:
+                init_masks_dir = layout.mask_init_masks_dir
+
+            if only == "mask":
+                print(f"[compare] only_stage=mask done: {name}")
+                continue
 
             if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
                 frames_dir, init_masks_dir, track_method
@@ -571,49 +408,14 @@ def main() -> None:
                     part_label=part_label,
                 )
                 rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-                print(f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} psnr={summary.get('video_psnr')}")
+                print(
+                    f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} "
+                    f"mask_score={summary.get('mask_score')}"
+                )
                 continue
 
-            if track_env:
-                track_argv = [
-                    "--run_dir",
-                    str(run_dir),
-                    "--frames_dir",
-                    str(frames_dir),
-                    "--in_masks_dir",
-                    str(init_masks_dir),
-                    "--method",
-                    track_method,
-                    "--repo_root",
-                    str(repo_root),
-                    *([] if not overwrite else ["--overwrite"]),
-                ]
-                if track_method == "sam3" and sam3_opts:
-                    track_argv += [
-                        "--sam3-checkpoint",
-                        str(sam3_opts.get("checkpoint", "ckpts/sam3/sam3.pt")),
-                        "--sam3-two-stage-anchor-idx",
-                        str(sam3_opts.get("two_stage_anchor_idx", "auto")),
-                        "--sam3-two-stage-auto-samples",
-                        str(int(sam3_opts.get("two_stage_auto_samples", 7))),
-                        "--sam3-two-stage-auto-max-fg-frac",
-                        str(float(sam3_opts.get("two_stage_auto_max_fg_frac", 0.92))),
-                        "--sam3-two-stage-auto-min-fg-frac",
-                        str(float(sam3_opts.get("two_stage_auto_min_fg_frac", 0.00008))),
-                        "--sam3-two-stage-auto-min-fg-pixels",
-                        str(int(sam3_opts.get("two_stage_auto_min_fg_pixels", 64))),
-                        "--sam3-score-thresh",
-                        str(float(sam3_opts.get("score_thresh", 0.0))),
-                    ]
-                _run_stage_via_conda_run(
-                    conda_exe=conda_exe,
-                    env_name=track_env,
-                    module="object_removal.cli.track",
-                    argv=track_argv,
-                    cwd=repo_root,
-                )
-            else:
-                run_track_stage(
+            if only is None or only == "track":
+                track_masks_dir = run_track_stage(
                     run_dir=run_dir,
                     frames_dir=frames_dir,
                     in_masks_dir=init_masks_dir,
@@ -622,33 +424,15 @@ def main() -> None:
                     sam3_options=sam3_opts if track_method == "sam3" else None,
                     repo_root=repo_root,
                 )
-            track_masks_dir = layout.track_masks_binary_dir
-
-            if inpaint_env:
-                inpaint_argv = [
-                    "--run_dir",
-                    str(run_dir),
-                    "--frames_dir",
-                    str(frames_dir),
-                    "--masks_dir",
-                    str(track_masks_dir),
-                    "--method",
-                    inpaint_method,
-                    *([] if not overwrite else ["--overwrite"]),
-                ]
-                if diffueraser_opts:
-                    inpaint_argv += inpaint_argv_from_diffueraser_opts(diffueraser_opts)
-                if propainter_opts:
-                    inpaint_argv += inpaint_argv_from_propainter_opts(propainter_opts)
-                _run_stage_via_conda_run(
-                    conda_exe=conda_exe,
-                    env_name=inpaint_env,
-                    module="object_removal.cli.inpaint",
-                    argv=inpaint_argv,
-                    cwd=repo_root,
-                )
             else:
-                run_inpaint_stage(
+                track_masks_dir = layout.track_masks_binary_dir
+
+            if only == "track":
+                print(f"[compare] only_stage=track done: {name}")
+                continue
+
+            if only is None or only == "inpaint":
+                inpaint_frames_dir = run_inpaint_stage(
                     run_dir=run_dir,
                     frames_dir=frames_dir,
                     masks_dir=track_masks_dir,
@@ -657,9 +441,166 @@ def main() -> None:
                     diffueraser_options=diffueraser_opts,
                     propainter_options=propainter_opts,
                 )
-            inpaint_frames_dir = layout.inpaint_frames_dir
+            else:
+                inpaint_frames_dir = layout.inpaint_frames_dir
 
-        if export_mask_vis:
+            if only == "inpaint":
+                print(f"[compare] only_stage=inpaint done: {name}")
+                continue
+        else:
+            if only is None or only == "mask":
+                if mask_env:
+                    mask_argv = [
+                        "--run_dir",
+                        str(run_dir),
+                        "--frames_dir",
+                        str(frames_dir),
+                        "--method",
+                        mask_method,
+                        "--repo_root",
+                        str(repo_root),
+                        *([] if not overwrite else ["--overwrite"]),
+                    ]
+                    if vggt4d_opts:
+                        mask_argv += mask_argv_from_vggt_opts(vggt4d_opts, mask_method=mask_method)
+                    _run_stage_via_conda_run(
+                        conda_exe=conda_exe,
+                        env_name=mask_env,
+                        module="object_removal.cli.mask",
+                        argv=mask_argv,
+                        cwd=repo_root,
+                    )
+                else:
+                    run_mask_stage(
+                        run_dir=run_dir,
+                        frames_dir=frames_dir,
+                        method=mask_method,
+                        overwrite=overwrite,
+                        vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
+                        repo_root=repo_root,
+                    )
+            init_masks_dir = layout.mask_init_masks_dir
+
+            if only == "mask":
+                print(f"[compare] only_stage=mask done: {name}")
+                continue
+
+            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
+                frames_dir, init_masks_dir, track_method
+            ):
+                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
+                summary = write_zero_eval_summary(
+                    layout.eval_dir,
+                    experiment_name=name,
+                    part_label=part_label,
+                )
+                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
+                print(
+                    f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} "
+                    f"mask_score={summary.get('mask_score')}"
+                )
+                continue
+
+            if only is None or only == "track":
+                if track_env:
+                    track_argv = [
+                        "--run_dir",
+                        str(run_dir),
+                        "--frames_dir",
+                        str(frames_dir),
+                        "--in_masks_dir",
+                        str(init_masks_dir),
+                        "--method",
+                        track_method,
+                        "--repo_root",
+                        str(repo_root),
+                        *([] if not overwrite else ["--overwrite"]),
+                    ]
+                    if track_method == "sam3" and sam3_opts:
+                        track_argv += [
+                            "--sam3-checkpoint",
+                            str(sam3_opts.get("checkpoint", "ckpts/sam3/sam3.pt")),
+                            "--sam3-two-stage-anchor-idx",
+                            str(sam3_opts.get("two_stage_anchor_idx", "auto")),
+                            "--sam3-two-stage-auto-samples",
+                            str(int(sam3_opts.get("two_stage_auto_samples", 7))),
+                            "--sam3-two-stage-auto-max-fg-frac",
+                            str(float(sam3_opts.get("two_stage_auto_max_fg_frac", 0.92))),
+                            "--sam3-two-stage-auto-min-fg-frac",
+                            str(float(sam3_opts.get("two_stage_auto_min_fg_frac", 0.00008))),
+                            "--sam3-two-stage-auto-min-fg-pixels",
+                            str(int(sam3_opts.get("two_stage_auto_min_fg_pixels", 64))),
+                            "--sam3-score-thresh",
+                            str(float(sam3_opts.get("score_thresh", 0.0))),
+                        ]
+                    _run_stage_via_conda_run(
+                        conda_exe=conda_exe,
+                        env_name=track_env,
+                        module="object_removal.cli.track",
+                        argv=track_argv,
+                        cwd=repo_root,
+                    )
+                else:
+                    run_track_stage(
+                        run_dir=run_dir,
+                        frames_dir=frames_dir,
+                        in_masks_dir=init_masks_dir,
+                        method=track_method,
+                        overwrite=overwrite,
+                        sam3_options=sam3_opts if track_method == "sam3" else None,
+                        repo_root=repo_root,
+                    )
+                track_masks_dir = layout.track_masks_binary_dir
+            else:
+                track_masks_dir = layout.track_masks_binary_dir
+
+            if only == "track":
+                print(f"[compare] only_stage=track done: {name}")
+                continue
+
+            if only is None or only == "inpaint":
+                if inpaint_env:
+                    inpaint_argv = [
+                        "--run_dir",
+                        str(run_dir),
+                        "--frames_dir",
+                        str(frames_dir),
+                        "--masks_dir",
+                        str(track_masks_dir),
+                        "--method",
+                        inpaint_method,
+                        *([] if not overwrite else ["--overwrite"]),
+                    ]
+                    if diffueraser_opts:
+                        inpaint_argv += inpaint_argv_from_diffueraser_opts(diffueraser_opts)
+                    if propainter_opts:
+                        inpaint_argv += inpaint_argv_from_propainter_opts(propainter_opts)
+                    _run_stage_via_conda_run(
+                        conda_exe=conda_exe,
+                        env_name=inpaint_env,
+                        module="object_removal.cli.inpaint",
+                        argv=inpaint_argv,
+                        cwd=repo_root,
+                    )
+                else:
+                    run_inpaint_stage(
+                        run_dir=run_dir,
+                        frames_dir=frames_dir,
+                        masks_dir=track_masks_dir,
+                        method=inpaint_method,
+                        overwrite=overwrite,
+                        diffueraser_options=diffueraser_opts,
+                        propainter_options=propainter_opts,
+                    )
+                inpaint_frames_dir = layout.inpaint_frames_dir
+            else:
+                inpaint_frames_dir = layout.inpaint_frames_dir
+
+            if only == "inpaint":
+                print(f"[compare] only_stage=inpaint done: {name}")
+                continue
+
+        if export_mask_vis and only is None:
             vis_path = layout.track_mask_vis_mp4
             n_masks = len(list(track_masks_dir.glob("*.png")))
             if n_masks > 0:
@@ -676,7 +617,7 @@ def main() -> None:
             else:
                 print(f"[compare] mask_vis: skipped (no PNG under {track_masks_dir})")
 
-        # Eval
+        # Eval (full pipeline)
         summary = run_eval(
             EvalInputs(
                 output_dir=layout.eval_dir,
@@ -685,14 +626,18 @@ def main() -> None:
                 pred_mask_dir=track_masks_dir,
                 gt_mask_dir=gt_mask_dir,
                 pred_frames_dir=inpaint_frames_dir,
-                gt_frames_dir=gt_frames_dir,
+                gt_frames_dir=None,
+                source_frames_dir=frames_dir,
                 merge_gt_objects=True,
                 video_metric_impl="internal",
             )
         )
 
         rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-        print(f"[compare] done: {name} (mask_jm={summary.get('mask_jm')} psnr={summary.get('video_psnr')})")
+        print(
+            f"[compare] done: {name} (mask_jm={summary.get('mask_jm')} mask_fm={summary.get('mask_fm')} "
+            f"mask_fr={summary.get('mask_fr')} mask_score={summary.get('mask_score')})"
+        )
 
     rows.sort(key=lambda r: str(r.get("method", "")))
     _write_combined(rows, summary_root / "combined.csv", summary_root / "combined.md")

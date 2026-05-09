@@ -217,7 +217,14 @@ Outputs:
 <out_root>/
   meta/                # compare_run.json / task.json / pipelines.json
   runs/<pipeline_id>/  # per-pipeline artifacts
-  summary/             # combined.csv / combined.md
+  summary/             # combined.csv / combined.md (no experiment_name column)
+
+**Reading `combined` metrics**
+
+- **`mask_score`**: with per-frame pred vs GT masks, **`(mask_jm + mask_fm + mask_fr) / 3`** (`mask_fm` = boundary F-mean, `mask_fr` = boundary F-recall). If metrics come **only from a DAVIS summary CSV** (no FM/FR), **`(mask_jm + mask_jr) / 2`**.
+- **`quality_score`**: currently **always `null`**—no bundled reference-free composite (`quality_score_source` = `disabled_no_single_reference_metric`). Raw terms (`bg_l1_mean`, temporal warp, Laplacian, optional BRISQUE) remain in `metrics_summary.json` for manual inspection or a future scorer.
+- **Higher is better**: `mask_jm`, `mask_jr`, `mask_fm`, `mask_fr`, `mask_score`.
+- **Lower is better**: `bg_l1_mean`, `temporal_warp_error_mean`, `temporal_warp_error_hole_mean`. `flow_consistency_mean`: **lower is smoother** on the background band (legacy naming).
 ```
 
 ### Manual per-stage (debug)
@@ -226,7 +233,7 @@ Outputs:
 python -m object_removal.cli.mask    --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --method vggt4d --repo_root .
 python -m object_removal.cli.track   --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --in_masks_dir runs/demo/mask/init/masks --method sam3 --repo_root .
 python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --masks_dir runs/demo/track/masks_binary --method diffueraser
-python -m object_removal.cli.eval    --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --gt_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
+python -m object_removal.cli.eval    --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --source_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
 ```
 
 ---

@@ -12,8 +12,13 @@
 # mask_vis_fps: 10
 # mask_vis_alpha: 0.5
 # 或命令行: python -m object_removal.cli.compare --export-mask-vis
+#
+# only_stage: 可选 mask | track | inpaint | eval；只跑该阶段。
+# mask/track/inpaint 须恰好一条 pipeline；eval 可与 run_all_pipelines 合用，对所有 pipeline 逐个 eval。
+# CLI --only-stage 会覆盖此处。eval 不重跑推理，只读已有 inpaint 帧与 track mask。
+# only_stage: eval
 
-task: davis:scooter-board
+task: davis:bmx-trees
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
 # pipelines:
@@ -27,3 +32,5 @@ part_label: ""
 conda_exe: conda
 env_map: configs/env_map.json
 env_policy: auto
+
+only_stage: eval

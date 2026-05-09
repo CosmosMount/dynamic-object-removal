@@ -24,7 +24,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pred_video", default="")
     p.add_argument("--gt_video", default="")
     p.add_argument("--pred_frames_dir", default="")
-    p.add_argument("--gt_frames_dir", default="")
+    p.add_argument(
+        "--source_frames_dir",
+        default="",
+        help="Original RGB frames (e.g. DAVIS JPEGImages); required for bg L1 and temporal metrics.",
+    )
+    p.add_argument(
+        "--gt_frames_dir",
+        default="",
+        help="Deprecated: GT inpaint frames are no longer used for PSNR/SSIM.",
+    )
     p.add_argument("--video_metric_impl", choices=["internal", "propainter"], default="internal")
     p.add_argument("--propainter_root", default="", help="Required if video_metric_impl=propainter")
     return p
@@ -47,6 +56,7 @@ def main() -> None:
         gt_video=Path(args.gt_video) if args.gt_video else None,
         pred_frames_dir=Path(args.pred_frames_dir) if args.pred_frames_dir else None,
         gt_frames_dir=Path(args.gt_frames_dir) if args.gt_frames_dir else None,
+        source_frames_dir=Path(args.source_frames_dir) if args.source_frames_dir else None,
         video_metric_impl=args.video_metric_impl,
     )
 
@@ -56,7 +66,10 @@ def main() -> None:
     write_method_manifest(layout.eval_dir, stage="eval", method="eval", params=vars(args))
     print(f"Wrote: {layout.eval_metrics_json}")
     print(f"Wrote: {layout.eval_metrics_csv}")
-    print(f"mask_jm={summary.get('mask_jm')} mask_jr={summary.get('mask_jr')} psnr={summary.get('video_psnr')} ssim={summary.get('video_ssim')}")
+    print(
+        f"mask_jm={summary.get('mask_jm')} mask_jr={summary.get('mask_jr')} "
+        f"mask_score={summary.get('mask_score')} quality_score={summary.get('quality_score')}"
+    )
 
 
 if __name__ == "__main__":

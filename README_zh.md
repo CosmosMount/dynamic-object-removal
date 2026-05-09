@@ -229,7 +229,14 @@ python -m object_removal.cli.compare
 <out_root>/
   meta/                # compare_run.json / task.json / pipelines.json
   runs/<pipeline_id>/  # 每条 pipeline 的 mask/track/inpaint/eval 产物
-  summary/             # combined.csv / combined.md
+  summary/             # combined.csv / combined.md（无 experiment_name 列）
+
+**combined 指标怎么读**
+
+- **`mask_score`**：有逐帧预测 mask 与 GT 时 **`(mask_jm + mask_fm + mask_fr) / 3`**（`mask_fm` 为边界 F-mean，`mask_fr` 为边界 F-recall，与 `metrics_summary.json` 中字段一致）。仅来自 **Davis 汇总 CSV**（无 FM/FR）时为 **`(mask_jm + mask_jr) / 2`**。
+- **`quality_score`**：当前**固定为 `null`**，不再做无参考合成（`quality_score_source` 为 `disabled_no_single_reference_metric`）。`bg_l1_mean`、时序 warp、Laplacian、BRISQUE 等仍写入 `metrics_summary.json` 供人工或后续模型使用。
+- **越高越好**：`mask_jm`、`mask_jr`、`mask_fm`、`mask_fr`、`mask_score`。
+- **越低越好**：`bg_l1_mean`、`temporal_warp_error_mean`、`temporal_warp_error_hole_mean`。`flow_consistency_mean` 为相邻帧光流在背景上的变化幅度，**越低越稳**。
 ```
 
 ### 6.2 手动分阶段（排障）
@@ -238,7 +245,7 @@ python -m object_removal.cli.compare
 python -m object_removal.cli.mask   --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --method vggt4d --repo_root .
 python -m object_removal.cli.track  --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --in_masks_dir runs/demo/mask/init/masks --method sam3 --repo_root .
 python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --masks_dir runs/demo/track/masks_binary --method diffueraser
-python -m object_removal.cli.eval   --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --gt_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
+python -m object_removal.cli.eval   --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --source_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
 ```
 
 ---
