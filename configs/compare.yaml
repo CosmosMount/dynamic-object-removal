@@ -1,0 +1,26 @@
+# 默认 compare 运行配置：`python -m object_removal.cli.compare`（可用 CLI 覆盖单项）
+#
+# task: 必填，如 davis:bmx-trees
+# davis_root: DAVIS 根目录（相对仓库根）
+# pipelines_config: 管线定义文件（内含 pipelines: 与各 pipeline 的 vggt4d/sam3/…）
+# pipelines: 要跑的 pipeline id 列表；与 run_all_pipelines 二选一
+# run_all_pipelines: true 时等价于原 --all
+# out_root: 输出根目录；省略时默认为 outputs/compare/<序列名>（从 task 的 davis:SEQ 取 SEQ）
+# overwrite: 是否覆盖已有阶段输出
+# part_label, conda_exe, env_map, env_policy: 与原先 CLI 一致
+
+task: davis:bmx-trees
+davis_root: data/DAVIS
+pipelines_config: configs/pipelines.yaml
+pipelines:
+  - vggt4d_sam3_diffueraser
+  - vggt4d_sam3_propainter
+overwrite: true
+
+# 不设 out_root 时默认为 outputs/compare/bmx-trees
+# out_root: outputs/compare/bmx-trees-all
+
+part_label: ""
+conda_exe: conda
+env_map: configs/env_map.json
+env_policy: auto

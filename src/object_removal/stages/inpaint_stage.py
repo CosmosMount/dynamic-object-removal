@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import fields, replace
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
@@ -16,6 +18,8 @@ def run_inpaint_stage(
     masks_dir: Path,
     method: str,
     overwrite: bool = False,
+    diffueraser_options: Optional[Dict[str, Any]] = None,
+    propainter_options: Optional[Dict[str, Any]] = None,
 ) -> Path:
     layout = RunLayout(run_dir)
     ensure_layout_dirs(layout)
@@ -37,7 +41,17 @@ def run_inpaint_stage(
 
     if method == "propainter":
         tmp_root = layout.inpaint_dir / "propainter"
-        meta = propainter.run(repo_root=Path.cwd(), frames_dir=frames_dir, masks_dir=masks_dir, out_root=tmp_root, params=propainter.Params())
+        base_pp = propainter.Params()
+        po = propainter_options or {}
+        allowed_pp = {f.name for f in fields(propainter.Params)}
+        params_pp = replace(base_pp, **{k: v for k, v in po.items() if k in allowed_pp})
+        meta = propainter.run(
+            repo_root=Path.cwd(),
+            frames_dir=frames_dir,
+            masks_dir=masks_dir,
+            out_root=tmp_root,
+            params=params_pp,
+        )
         # normalize to canonical run_dir/inpaint/frames
         pp_frames = Path(meta.get("frames_out", ""))
         if pp_frames.is_dir():
@@ -64,12 +78,16 @@ def run_inpaint_stage(
         repo_root = Path.cwd()
         # Keep all DiffuEraser weights under repo_root/ckpts/diffueraser/weights/...
         w = repo_root / "ckpts" / "diffueraser" / "weights"
-        params = diffueraser.Params(
+        base_de = diffueraser.Params(
             base_model_path=w / "stable-diffusion-v1-5",
             vae_path=w / "sd-vae-ft-mse",
             diffueraser_path=w / "diffuEraser",
             propainter_model_dir=w / "propainter",
         )
+        do = diffueraser_options or {}
+        skip_paths = {"base_model_path", "vae_path", "diffueraser_path", "propainter_model_dir"}
+        allowed_de = {f.name for f in fields(diffueraser.Params)} - skip_paths
+        params = replace(base_de, **{k: v for k, v in do.items() if k in allowed_de})
         meta = diffueraser.run(repo_root=repo_root, input_video=input_video, input_mask=input_mask, out_dir=tmp, params=params)
         # extract frames to canonical
         out_dir.mkdir(parents=True, exist_ok=True)

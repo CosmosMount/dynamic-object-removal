@@ -1,163 +1,237 @@
-# Video Object Removal (clean-slate refactor)
+# Dynamic Object Removal — Deployment & End-to-End Guide
 
-This repository is a **pure Python** pipeline with explicit stages:
+This repository implements a modular video object removal pipeline split into four explicit stages:
 
 **mask → track → inpaint → eval**
 
-All code lives under `src/object_removal/`. Legacy `pipelines/`/`scripts/` have been removed.
+- **Core pipeline code**: `src/object_removal/`
+- **Vendored third-party methods**: `modules/`
+- **Run configuration**: `configs/compare.yaml` (one run) and `configs/pipelines.yaml` (pipelines + params)
 
-## Repository structure (new)
-- `src/object_removal/`
-  - `cli/`: per-stage CLIs + `compare`
-  - `stages/`: stage orchestrators (stable I/O contracts)
-  - `methods/`: interchangeable implementations (sam2/sam3/propainter/diffueraser/trackanything/…)
-  - `io/`: canonical run directory layout + frame/mask helpers
-- `modules/`: third-party modules (VGGT4D, SAM2, SAM3, ProPainter, DiffuEraser, Track-Anything, …)
-- `ckpts/`: model checkpoints / weights (not tracked by git; see `.gitignore`)
-- `data/DAVIS/`: DAVIS dataset (frames + annotations)
+Chinese version: **`README_zh.md`**
 
-### Checkpoints layout (`ckpts/`)
+---
 
-Place downloaded weights here (repo code resolves these paths by default):
+## 0. Quick start (recommended)
 
-- `ckpts/sam2/*.pt` — SAM2 checkpoints (e.g. `sam2.1_hiera_large.pt`)
-- `ckpts/sam3/sam3.pt` — SAM3 video checkpoint (+ tokenizer files if you keep them alongside)
-- `ckpts/trackanything/` — Segment Anything + XMem weights for Track-Anything
-- `ckpts/yolo/yolov8n-seg.pt` — YOLOv8-seg for `mask=yolo_first`, `track=optflow`, Track-Anything init, baseline YOLO branch
-- `ckpts/propainter/weights/` — ProPainter auto-download cache (RAFT / completion / `ProPainter.pth`; created when you run `inpaint=propainter`)
-- `ckpts/diffueraser/weights/` — DiffuEraser bundle (`stable-diffusion-v1-5`, `sd-vae-ft-mse`, `diffuEraser`, `propainter`, `PCM_Weights`, …)
-
-### Evaluation (`cli/eval`)
-
-`eval` 在 `src/object_removal/stages/eval_stage.py` 内用 **OpenCV + NumPy** 计算 mask IoU（J&F 风格）与帧 PSNR/SSIM；**不需要** 安装或保留 `davis2017-evaluation` 仓库。若你手头有官方 DAVIS 评测脚本生成的指标 CSV，可通过 `--davis_csv` 读入其中的 J-Mean / J-Recall 字段（可选）。
-
-### `modules/` 体积说明
-
-为只保留跑通本仓库流水线所需内容，已删除各子项目中的训练脚本、示例数据、演示与评测辅助目录等；推理仍依赖各自的 `sam2/`、`sam3/`、`model/`、`diffueraser/` 等代码包，请勿再手动删掉这些目录。
-
-## Running (recommended)
-
-We run modules in their own conda envs (the code does **not** try to switch envs automatically).
-
-### Conda environments (per stage / method)
-
-The rule is simple:
-
-- **The CLIs run in the currently activated env.** If a pipeline uses multiple heavy modules with conflicting deps, you must **run stages separately** under the corresponding envs.
-
-Conda env names (as used in this repo/docs):
-
-- **vggt**: VGGT4D mask generation
-  - Used by: `mask=vggt4d|vggt_framewise`
-  - Needs: `modules/VGGT4D/requirements.txt` (notably `pycolmap`, `open3d`, `onnxruntime`, …)
-- **sam2**: SAM2 tracker (YOLO init is also commonly run in this env)
-  - Used by: `track=sam2` and often `mask=yolo_first`
-  - Needs: `modules/sam2` deps (see `modules/sam2/pyproject.toml`)
-- **sam3**: SAM3 tracker
-  - Used by: `track=sam3`
-  - Needs: `modules/sam3` deps (see `modules/sam3/pyproject.toml`)
-- **propainter**: ProPainter inpainting
-  - Used by: `inpaint=propainter`
-  - Needs: `modules/ProPainter/requirements.txt`
-- **diffueraser**: DiffuEraser inpainting
-  - Used by: `inpaint=diffueraser`
-  - Needs: `modules/DiffuEraser/requirements.txt` (pins `torch==2.3.1` / `diffusers==0.29.2` etc)
-  - Install **`ffmpeg`** (e.g. `/usr/bin/ffmpeg`): outputs are re-encoded to H.264 (yuv420p + faststart) so `diffueraser_result.mp4` plays in VS Code. `compare`’s `conda run` prepends `/usr/bin` to `PATH` so re-encode can find it; if re-encode still fails, check the stderr line printed by the inpaint step.
-- **trackanything**: Track-Anything tracker
-  - Used by: `track=trackanything`
-  - Needs: `modules/Track-Anything/requirements.txt` (+ checkpoints under `ckpts/trackanything/`)
-- **davis**: evaluation / lightweight utilities
-  - Used by: `eval` + `track=identity|optflow` + `inpaint=baseline_handcrafted`
-  - Python deps: `numpy`, `opencv-python`
-
-### When to activate which env
-
-Because we do **not** auto-switch envs, you have two safe ways to run:
-
-- **One env run**: only for pipelines whose `mask/track/inpaint/eval` all work in the *same* env.
-- **Stage-by-stage**: activate the right env for each stage, reusing the same `run_dir`.
-
-Examples (stage-by-stage):
-
-- **baseline** (all in `davis`):
-  - `conda activate davis` → run `mask` (baseline/yolo) → `track` (identity/optflow) → `inpaint` (handcrafted) → `eval`
-- **yolosam2** (common split):
-  - `conda activate sam2` → run `mask=yolo_first` + `track=sam2`
-  - `conda activate propainter` → run `inpaint=propainter`
-  - `conda activate davis` → run `eval`
-- **vggt4dsam3_diffueraser** (common split):
-  - `conda activate vggt` → run `mask=vggt4d`
-  - `conda activate sam3` → run `track=sam3`
-  - `conda activate diffueraser` → run `inpaint=diffueraser`
-  - `conda activate davis` → run `eval`
-- **vggt_trackanything_diffueraser** (common split):
-  - `conda activate vggt` → `mask=vggt4d`
-  - `conda activate trackanything` → `track=trackanything`
-  - `conda activate diffueraser` → `inpaint=diffueraser`
-  - `conda activate davis` → `eval`
-
-All commands below assume you are at repo root.
-
-Recommended (per conda env): install this repo as editable so you don't need `PYTHONPATH`:
+1. Prepare DAVIS under `data/DAVIS` (Section 2).
+2. Create the required conda envs and install dependencies (Section 5).
+3. Edit `configs/compare.yaml` (task / pipelines / overwrite / out_root).
+4. From repo root:
 
 ```bash
+python -m object_removal.cli.compare
+```
+
+By default, `compare` reads `configs/compare.yaml`. If `out_root` is omitted, it defaults to:
+`outputs/compare/<DAVIS sequence name>` (e.g. `davis:bmx-trees` → `outputs/compare/bmx-trees`).
+
+---
+
+## 1. Repository layout
+
+```
+src/object_removal/        # main package: cli / stages / methods / io
+modules/                  # third-party: VGGT4D, SAM2, SAM3, ProPainter, DiffuEraser, Track-Anything…
+configs/                  # compare.yaml + pipelines.yaml + env_map.json
+ckpts/                    # model weights (not tracked)
+data/DAVIS/               # DAVIS dataset (not tracked)
+outputs/compare/          # default outputs (override via compare.yaml)
+```
+
+---
+
+## 2. Data: DAVIS
+
+Default `davis_root` is `data/DAVIS`. Expected structure:
+
+```
+data/DAVIS/
+  JPEGImages/480p/<SEQ>/*.jpg
+  Annotations_unsupervised/480p/<SEQ>/*.png   # or Annotations/480p/<SEQ>/*.png
+```
+
+Task syntax: `task: davis:<SEQ>` (e.g. `davis:bmx-trees`).
+
+---
+
+## 3. Weights: `ckpts/`
+
+Place weights under these default paths (relative to repo root):
+
+- **VGGT4D**: `ckpts/vggt4d/model_tracker_fixed_e20.pt`
+  - If missing, `modules/VGGT4D/demo_vggt4d.py` may attempt to download it into `ckpts/vggt4d/` (network required), or you can place it manually.
+- **SAM2**: put SAM2 checkpoint(s) under `ckpts/sam2/` (e.g. `sam2.1_hiera_large.pt`)
+- **SAM3**: `ckpts/sam3/sam3.pt`
+- **YOLOv8-seg**: `ckpts/yolo/yolov8n-seg.pt`
+- **DiffuEraser bundle**: under `ckpts/diffueraser/weights/`:
+  - `stable-diffusion-v1-5/`
+  - `sd-vae-ft-mse/`
+  - `diffuEraser/`
+  - `propainter/`
+  - `PCM_Weights/` (e.g. `PCM_Weights/sd15/pcm_sd15_smallcfg_2step_converted.safetensors`)
+- **Track-Anything**: follow its README and centralize checkpoints under `ckpts/trackanything/`.
+
+---
+
+## 4. Config-first workflow (avoid long CLI commands)
+
+### 4.1 `configs/compare.yaml` — one “run job” config
+
+This replaces long commands such as:
+
+```bash
+python -m object_removal.cli.compare --task davis:bmx-trees --pipelines ... --out_root ...
+```
+
+You typically edit:
+
+- **`task`**
+- **`pipelines`** (pipeline ids defined in `configs/pipelines.yaml`)
+- **`overwrite`** (recommend `true` while iterating)
+- **`out_root`** (optional; omit to use the default `outputs/compare/<SEQ>`)
+
+### 4.2 `configs/pipelines.yaml` — pipelines + all tunable parameters
+
+Each pipeline contains required fields `mask` / `track` / `inpaint`, plus optional blocks (all defined in YAML, not CLI):
+
+- `vggt4d:` (includes `dyn_threshold_scale`, etc.)
+- `sam3:`
+- `diffueraser:` / `propainter:`
+
+The YAML documents supported keys at the top.
+
+### 4.3 `configs/env_map.json` — method → conda env
+
+With default `env_policy: auto`, `compare` runs stages via:
+
+`conda run -n <env> python -m object_removal.cli.<stage> ...`
+
+Mapping lives in `configs/env_map.json`. Empty string `""` means: run that stage in the **current** Python environment running `compare`.
+
+---
+
+## 5. Per-conda-env installation (based on each module’s README)
+
+### System dependencies
+
+- **ffmpeg**: strongly recommended (e.g. `apt install ffmpeg`). The pipeline uses it to produce H.264 MP4 previews and to extract frames robustly.
+
+### Common step (do this in every env)
+
+```bash
+cd /path/to/dynamic-object-removal
 pip install -e .
+pip install pyyaml
 ```
 
-### One-command comparison on a DAVIS sequence
+### 5.1 `vggt` env (VGGT4D)
 
-Run multiple pipelines on the same sequence and aggregate metrics:
-
-By default, `compare` will **auto-run each stage in its corresponding conda env** via `conda run`.
-This means you can run one command from a lightweight core env, as long as the target envs exist
-and each env has this repo installed (`pip install -e .`).
+Based on `modules/VGGT4D/README.md` and `modules/VGGT4D/requirements.txt`:
 
 ```bash
-python -m object_removal.cli.compare \
-  --task davis:bmx-trees \
-  --davis_root data/DAVIS \
-  --pipelines baseline yolosam2 yoloopt \
-  --out_root outputs/compare/bmx-trees
+conda activate vggt
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -r modules/VGGT4D/requirements.txt
 ```
 
-Notes:
-- `baseline`: handcrafted baseline (single env with numpy/opencv; YOLO optional)
-- `yolosam2`: YOLO init → SAM2 track → ProPainter inpaint
-- `yoloopt`: YOLO init → optflow track → ProPainter inpaint
-- Env mapping is configured in `configs/env_map.json` (method → conda env). Override with `--env_map` if needed.
-  Empty string means “run in the same env as `compare`” for that stage (you must have that stage’s dependencies installed there).
-- Use `--env_policy force_single` to disable auto env switching (runs everything in current env).
+VGGT4D upstream suggests specific PyTorch/CUDA builds; install PyTorch matching your driver/CUDA.
 
-### Run stages manually (per-stage CLI)
+### 5.2 `sam2` env (SAM2)
 
-Mask:
+Based on `modules/sam2/README.md`:
 
 ```bash
-python -m object_removal.cli.mask --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --method yolo_first
+conda activate sam2
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -e modules/sam2
 ```
 
-Track:
+Follow the upstream SAM2 README for the required PyTorch/CUDA toolkit (SAM2 may compile CUDA extensions).
+
+### 5.3 `sam3` env (SAM3)
+
+Based on `modules/sam3/README.md`:
 
 ```bash
-python -m object_removal.cli.track --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --in_masks_dir runs/demo/mask/init/masks --method sam2
+conda activate sam3
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -e modules/sam3
 ```
 
-Inpaint:
+Upstream SAM3 may require Hugging Face access/login to download checkpoints; you can also place a local checkpoint at `ckpts/sam3/sam3.pt`.
+
+### 5.4 `propainter` env (ProPainter)
+
+Based on `modules/ProPainter/README.md` and `modules/ProPainter/requirements.txt`:
 
 ```bash
-python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --masks_dir runs/demo/track/masks_binary --method propainter
+conda activate propainter
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -r modules/ProPainter/requirements.txt
 ```
 
-Eval:
+Weights may auto-download on first inference (or place them under `ckpts/propainter/weights/`).
+
+### 5.5 `diffueraser` env (DiffuEraser)
+
+Based on `modules/DiffuEraser/README.md` and `modules/DiffuEraser/requirements.txt`:
 
 ```bash
-python -m object_removal.cli.eval --run_dir runs/demo \
-  --pred_mask_dir runs/demo/track/masks_binary \
-  --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees \
-  --pred_frames_dir runs/demo/inpaint/frames \
-  --gt_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
+conda activate diffueraser
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -r modules/DiffuEraser/requirements.txt
 ```
 
-## Work log
+Then prepare `ckpts/diffueraser/weights/` (Stable Diffusion, VAE, DiffuEraser, ProPainter, PCM_Weights).
 
-See `TASK.md` for a detailed refactor log.
+### 5.6 `trackanything` env (Track-Anything)
+
+Based on `modules/Track-Anything/README.md` and `modules/Track-Anything/requirements.txt`:
+
+```bash
+conda activate trackanything
+cd /path/to/dynamic-object-removal
+pip install -e .
+pip install -r modules/Track-Anything/requirements.txt
+```
+
+---
+
+## 6. Run
+
+### One-command compare (recommended)
+
+```bash
+python -m object_removal.cli.compare
+```
+
+Outputs:
+
+```
+<out_root>/
+  meta/                # compare_run.json / task.json / pipelines.json
+  runs/<pipeline_id>/  # per-pipeline artifacts
+  summary/             # combined.csv / combined.md
+```
+
+### Manual per-stage (debug)
+
+```bash
+python -m object_removal.cli.mask    --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --method vggt4d --repo_root .
+python -m object_removal.cli.track   --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --in_masks_dir runs/demo/mask/init/masks --method sam3 --repo_root .
+python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS/JPEGImages/480p/bmx-trees --masks_dir runs/demo/track/masks_binary --method diffueraser
+python -m object_removal.cli.eval    --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --gt_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
+```
+
+---
+
+## 7. Project conventions
+
+Repo-specific rules: `AGENTS.md`. Design notes: `PLAN.md`.
+
