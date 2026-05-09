@@ -24,7 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
+      # 不使用 configure-pages：在仓库从未启用过 Pages 时，该步骤会请求
+      # GET /repos/.../pages 并返回 404。纯静态上传无需该步骤。
       - uses: actions/upload-pages-artifact@v3
         with:
           path: page
