@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -42,6 +43,12 @@ def run_mask_stage(
         return out_dir
 
     if method == "vggt4d":
+        # Overwrite must drop VGGT scene outputs; otherwise stale dynamic_mask_*.png can remain
+        # (e.g. after max_frames / code change) and glob() picks wrong files — full run_dir delete avoided here.
+        if overwrite:
+            vggt_out = layout.mask_init_dir / "vggt_output"
+            if vggt_out.is_dir():
+                shutil.rmtree(vggt_out, ignore_errors=True)
         scene_dir = layout.mask_init_dir / "vggt4d_scene"
         init_dir = out_dir
         base = vggt4d.Params()

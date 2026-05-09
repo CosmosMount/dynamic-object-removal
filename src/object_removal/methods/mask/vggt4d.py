@@ -34,6 +34,31 @@ def _slot_from_dynamic_mask_name(name: str) -> int:
     return int(m.group(1))
 
 
+def _dynamic_mask_png_to_binary(path: Path, thr: int) -> Optional[np.ndarray]:
+    """Foreground mask {0,1} from VGGT dynamic_mask PNG.
+
+    IMREAD_GRAYSCALE drops alpha / mis-reads some palette+BGRA exports as all zeros;
+    use IMREAD_UNCHANGED and combine channels + alpha.
+    """
+    import cv2
+
+    arr = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if arr is None:
+        return None
+    if arr.ndim == 2:
+        return ((arr > thr).astype(np.uint8))
+    if arr.ndim != 3:
+        return None
+    ch = arr.shape[2]
+    if ch >= 4:
+        b, g, r, a = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2], arr[:, :, 3]
+        rgb_max = np.maximum(np.maximum(b.astype(np.int16), g), r)
+        fg = (rgb_max > thr) | (a > thr)
+    else:
+        fg = np.amax(arr[:, :, :ch], axis=2) > thr
+    return fg.astype(np.uint8)
+
+
 def _prep_binary_for_cc(binary: np.ndarray, close_kernel: int) -> np.ndarray:
     import cv2
 
@@ -136,44 +161,53 @@ def _gen_init_mask_from_scene(
                 f"vggt4d init_frame={want}: expected mask file {chosen!r} missing. "
                 f"Available orig-frame indices (from subsample): {avail_orig}"
             )
-        arr = cv2.imread(str(scene_output / chosen), cv2.IMREAD_GRAYSCALE)
-        if arr is None:
-            raise RuntimeError(f"Failed to read {scene_output / chosen}")
-        best_indexed = (arr > thr).astype(np.uint8)
+        bin0 = _dynamic_mask_png_to_binary(scene_output / chosen, thr)
+        if bin0 is None or int(bin0.sum()) == 0:
+            raise RuntimeError(f"Failed to read or empty dynamic mask: {scene_output / chosen}")
+        best_indexed = bin0.astype(np.uint8)
         orig_out = _orig_for_slot(best_slot)
     elif p.merge_all:
         merged = None
         per_frame: List[Tuple[str, int, np.ndarray]] = []
         for name in sorted(candidates, key=_slot_from_dynamic_mask_name):
             slot = _slot_from_dynamic_mask_name(name)
-            arr = cv2.imread(str(scene_output / name), cv2.IMREAD_GRAYSCALE)
-            if arr is None:
+            binary = _dynamic_mask_png_to_binary(scene_output / name, thr)
+            if binary is None:
                 continue
-            binary = (arr > thr).astype(np.uint8)
             per_frame.append((name, slot, binary))
             merged = binary if merged is None else np.maximum(merged, binary)
         if merged is None or not per_frame:
             raise RuntimeError(f"Failed to read any dynamic mask from {scene_output}")
 
-        n_merged = _count_components_ge_area(merged, min_a, ck)
-        best_indexed = merged
-        best_slot_fallback = max(per_frame, key=lambda t: int(t[2].sum()))[1]
-        best_slot = best_slot_fallback
-        best_n = n_merged
-        best_fg = int(merged.sum())
+        by_slot = {slot: binary for _name, slot, binary in per_frame}
+        best_indexed: np.ndarray
+        orig_out: int
 
-        for _name, slot, binary in per_frame:
-            nf = _count_components_ge_area(binary, min_a, ck)
-            fg = int(binary.sum())
-            if nf > best_n or (nf == best_n and nf > 0 and fg > best_fg):
-                best_n = nf
-                best_fg = fg
-                best_indexed = binary
-                best_slot = slot
+        # Prefer VGGT slot 0 when it has foreground (BGRA-safe read); else competition / merged naming.
+        b0 = by_slot.get(0)
+        if b0 is not None and int((b0 > 0).sum()) > 0:
+            best_indexed = b0
+            orig_out = _orig_for_slot(0)
+        else:
+            n_merged = _count_components_ge_area(merged, min_a, ck)
+            best_indexed = merged
+            best_slot = max(per_frame, key=lambda t: int(t[2].sum()))[1]
+            best_n = n_merged
+            best_fg = int(merged.sum())
 
-        if np.array_equal(best_indexed, merged):
-            best_slot = best_slot_fallback
-        orig_out = _orig_for_slot(best_slot)
+            for _name, slot, binary in per_frame:
+                nf = _count_components_ge_area(binary, min_a, ck)
+                fg = int(binary.sum())
+                if nf > best_n or (nf == best_n and nf > 0 and fg > best_fg):
+                    best_n = nf
+                    best_fg = fg
+                    best_indexed = binary
+                    best_slot = slot
+
+            if np.array_equal(best_indexed, merged):
+                orig_out = _orig_for_slot(0)
+            else:
+                orig_out = _orig_for_slot(best_slot)
     else:
         best_area = -1
         best_indexed: Optional[np.ndarray] = None
@@ -181,11 +215,10 @@ def _gen_init_mask_from_scene(
         best_slot = 0
         for name in sorted(candidates, key=_slot_from_dynamic_mask_name):
             slot = _slot_from_dynamic_mask_name(name)
-            arr = cv2.imread(str(scene_output / name), cv2.IMREAD_GRAYSCALE)
-            if arr is None:
+            binary = _dynamic_mask_png_to_binary(scene_output / name, thr)
+            if binary is None:
                 continue
-            indexed = np.zeros_like(arr, dtype=np.uint8)
-            indexed[arr > thr] = 1
+            indexed = binary.astype(np.uint8)
             area = int((indexed > 0).sum())
             nf = _count_components_ge_area(indexed, min_a, ck)
             if nf > best_n or (nf == best_n and area > best_area):
@@ -198,6 +231,7 @@ def _gen_init_mask_from_scene(
             raise RuntimeError(f"Failed to read any dynamic mask from {scene_output}")
         orig_out = _orig_for_slot(best_slot)
 
+    pre_split = best_indexed.copy()
     if p.split_cc:
         best_indexed, _ = _split_binary_into_instances(
             best_indexed,
@@ -205,6 +239,8 @@ def _gen_init_mask_from_scene(
             max_objects=int(p.cc_max_objects),
             close_kernel=ck,
         )
+    if int((best_indexed > 0).sum()) == 0 and int((pre_split > 0).sum()) > 0:
+        best_indexed = (pre_split > 0).astype(np.uint8)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{orig_out:05d}.png"

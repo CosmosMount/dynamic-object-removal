@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,6 +28,13 @@ def run_track_stage(
     if overwrite and out_dir.is_dir():
         for p in list(out_dir.glob("*.png")):
             p.unlink(missing_ok=True)
+    # SAM3 writes indexed masks under track/<video_name>/; clearing only masks_binary/*.png leaves stale frames.
+    if overwrite and method == "sam3":
+        vn = frames_dir.name
+        for rel in (vn, "tmp_sam3_init_masks", "masks_indexed_raw"):
+            p = layout.track_dir / rel
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
     existing = list(out_dir.glob("*.png"))
     if existing and not overwrite:
         return out_dir
