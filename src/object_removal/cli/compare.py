@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
+from object_removal.io.mask_vis import export_mask_overlay_video
 from object_removal.io.masks import init_masks_sufficient_for_track
 from object_removal.io.pipeline_argv import (
     inpaint_argv_from_diffueraser_opts,
@@ -291,6 +292,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "force_multi", "force_single"],
         help="Overrides YAML env_policy.",
     )
+    p.add_argument(
+        "--export-mask-vis",
+        action="store_true",
+        default=False,
+        help="After track, write track/mask_vis.mp4 (also set export_mask_vis in compare YAML).",
+    )
     return p
 
 
@@ -340,6 +347,9 @@ def main() -> None:
     env_policy = str(args.env_policy if args.env_policy is not None else cfg.get("env_policy", "auto") or "auto")
     overwrite = bool(cfg.get("overwrite", False)) or bool(args.overwrite)
     part_label = str(args.part_label if args.part_label is not None else cfg.get("part_label", "") or "")
+    export_mask_vis = bool(cfg.get("export_mask_vis", False)) or bool(args.export_mask_vis)
+    mask_vis_fps = float(cfg.get("mask_vis_fps", 10.0) or 10.0)
+    mask_vis_alpha = float(cfg.get("mask_vis_alpha", 0.5) or 0.5)
 
     registry = build_pipeline_registry(pipelines_config_path)
 
@@ -648,6 +658,23 @@ def main() -> None:
                     propainter_options=propainter_opts,
                 )
             inpaint_frames_dir = layout.inpaint_frames_dir
+
+        if export_mask_vis:
+            vis_path = layout.track_mask_vis_mp4
+            n_masks = len(list(track_masks_dir.glob("*.png")))
+            if n_masks > 0:
+                if export_mask_overlay_video(
+                    frames_dir,
+                    track_masks_dir,
+                    vis_path,
+                    fps=mask_vis_fps,
+                    alpha=mask_vis_alpha,
+                ):
+                    print(f"[compare] mask_vis: {vis_path}")
+                else:
+                    print(f"[compare] mask_vis: failed ({vis_path})")
+            else:
+                print(f"[compare] mask_vis: skipped (no PNG under {track_masks_dir})")
 
         # Eval
         summary = run_eval(

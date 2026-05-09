@@ -8,18 +8,20 @@
 # out_root: 输出根目录；省略时默认为 outputs/compare/<序列名>（从 task 的 davis:SEQ 取 SEQ）
 # overwrite: 是否覆盖已有阶段输出
 # part_label, conda_exe, env_map, env_policy: 与原先 CLI 一致
+# export_mask_vis: true 时 track 后写出 runs/<pipeline>/track/mask_vis.mp4（参考 object-removal postprocess_sam3）
+# mask_vis_fps: 10
+# mask_vis_alpha: 0.5
+# 或命令行: python -m object_removal.cli.compare --export-mask-vis
 
-task: davis:bear
+task: davis:scooter-board
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
 # pipelines:
 #   - vggt4d_sam3_diffueraser
 #   - vggt4d_sam3_propainter
 run_all_pipelines: true
-overwrite: false
-
-# 不设 out_root 时默认为 outputs/compare/bmx-trees
-# out_root: outputs/compare/bmx-trees-all
+overwrite: true
+export_mask_vis: true
 
 part_label: ""
 conda_exe: conda

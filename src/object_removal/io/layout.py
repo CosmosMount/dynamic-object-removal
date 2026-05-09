@@ -45,6 +45,10 @@ class RunLayout:
         return self.track_dir / "masks_binary"
 
     @property
+    def track_mask_vis_mp4(self) -> Path:
+        return self.track_dir / "mask_vis.mp4"
+
+    @property
     def track_masks_indexed_dir(self) -> Path:
         return self.track_dir / "masks_indexed"
 
