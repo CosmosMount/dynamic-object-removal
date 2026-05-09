@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
+from object_removal.io.masks import init_masks_sufficient_for_track
 from object_removal.io.pipeline_argv import (
     inpaint_argv_from_diffueraser_opts,
     inpaint_argv_from_propainter_opts,
@@ -16,7 +17,7 @@ from object_removal.io.pipeline_argv import (
 from object_removal.stages.inpaint_stage import run_inpaint_stage
 from object_removal.stages.mask_stage import run_mask_stage
 from object_removal.stages.track_stage import run_track_stage
-from object_removal.stages.eval_stage import EvalInputs, run_eval
+from object_removal.stages.eval_stage import EvalInputs, run_eval, write_zero_eval_summary
 
 
 def _count_rgb_frames(frames_dir: Path) -> int:
@@ -59,6 +60,11 @@ def _fmt(v: Any) -> str:
     if isinstance(v, float):
         return f"{v:.6f}"
     return str(v)
+
+
+def _track_uses_init_masks_dir(track_method: str) -> bool:
+    """Track methods that read init masks from mask/init/masks (not e.g. trackanything's own init)."""
+    return track_method in ("sam2", "sam3", "optflow", "identity")
 
 
 def _load_metrics_row(path: Path, method_name: str) -> Dict[str, Any]:
@@ -482,6 +488,18 @@ def main() -> None:
                 vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
                 repo_root=repo_root,
             )
+            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
+                frames_dir, init_masks_dir, track_method
+            ):
+                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
+                summary = write_zero_eval_summary(
+                    layout.eval_dir,
+                    experiment_name=name,
+                    part_label=part_label,
+                )
+                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
+                print(f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} psnr={summary.get('video_psnr')}")
+                continue
             track_masks_dir = run_track_stage(
                 run_dir=run_dir,
                 frames_dir=frames_dir,
@@ -532,6 +550,19 @@ def main() -> None:
                     repo_root=repo_root,
                 )
             init_masks_dir = layout.mask_init_masks_dir
+
+            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
+                frames_dir, init_masks_dir, track_method
+            ):
+                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
+                summary = write_zero_eval_summary(
+                    layout.eval_dir,
+                    experiment_name=name,
+                    part_label=part_label,
+                )
+                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
+                print(f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} psnr={summary.get('video_psnr')}")
+                continue
 
             if track_env:
                 track_argv = [

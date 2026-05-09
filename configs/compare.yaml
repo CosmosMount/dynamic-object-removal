@@ -9,7 +9,7 @@
 # overwrite: 是否覆盖已有阶段输出
 # part_label, conda_exe, env_map, env_policy: 与原先 CLI 一致
 
-task: davis:tennis
+task: davis:bear
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
 # pipelines:

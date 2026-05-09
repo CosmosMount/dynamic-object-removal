@@ -288,6 +288,39 @@ def write_summary(output_dir: Path, summary: dict) -> Tuple[Path, Path]:
     return json_path, csv_path
 
 
+def write_zero_eval_summary(
+    output_dir: Path,
+    *,
+    experiment_name: str,
+    part_label: str = "",
+    skip_reason: str = "skipped_no_init_mask",
+) -> dict:
+    """Write metrics_summary with numeric scores set to 0 (e.g. no init mask for SAM2)."""
+    summary = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "part_label": part_label,
+        "experiment_name": experiment_name,
+        "mask_jm": 0.0,
+        "mask_jr": 0.0,
+        "mask_frames": 0,
+        "mask_source": skip_reason,
+        "video_psnr": 0.0,
+        "video_ssim": 0.0,
+        "video_frames": 0,
+        "video_source": skip_reason,
+        "video_metric_impl": "internal",
+        "davis_csv": "",
+        "pred_mask_dir": "",
+        "gt_mask_dir": "",
+        "pred_video": "",
+        "gt_video": "",
+        "pred_frames_dir": "",
+        "gt_frames_dir": "",
+    }
+    write_summary(output_dir, summary)
+    return summary
+
+
 def run_eval(inputs: EvalInputs, *, propainter_root: Path | None = None) -> dict:
     metric_fn = resolve_video_metric_fn(inputs.video_metric_impl, propainter_root=propainter_root)
 
