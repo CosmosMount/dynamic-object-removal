@@ -18,7 +18,7 @@
 # CLI --only-stage 会覆盖此处。eval 不重跑推理，只读已有 inpaint 帧与 track mask。
 # only_stage: eval
 
-task: davis:scooter-board
+task: davis:bear
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
 # pipelines:
@@ -33,4 +33,4 @@ conda_exe: conda
 env_map: configs/env_map.json
 env_policy: auto
 
-# only_stage: eval
+only_stage: eval
