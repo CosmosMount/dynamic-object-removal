@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Automatic video object removal: VGGT4D motion priors, SAM3 two-stage mask propagation, DiffuEraser inpainting.">
+  <title>Automatic Video Object Removal — Project Page</title>
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/favicon.svg">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+<!--
+  Video assets: ./assets/mask_vis_<seq>_<pipeline>.mp4
+  Source: outputs/compare/<seq>/runs/<pipeline>/track/mask_vis.mp4
+  Pipelines: vggt4d_sam3_diffueraser (Ours), vggt4d_trackanything, vggt4d_diffueraser, vggt4d_sam3_propainter, yolo_sam2
+-->
+
+<nav class="navbar is-light" role="navigation" aria-label="main navigation">
+  <div class="navbar-brand">
+    <a class="navbar-item" href="#"><strong>Video Object Removal</strong></a>
+    <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </a>
+  </div>
+  <div id="navMenu" class="navbar-menu">
+    <div class="navbar-start">
+      <a class="navbar-item" href="#abstract">Abstract</a>
+      <a class="navbar-item" href="#method">Method</a>
+      <a class="navbar-item" href="#experiments">Experiments</a>
+      <a class="navbar-item" href="https://github.com/CosmosMount/dynamic-object-removal" target="_blank" rel="noopener">Code</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero is-small">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <h1 class="title is-2 publication-title">Automatic Video Object Removal</h1>
+      <p class="subtitle is-5">
+        VGGT4D-initiated SAM3 mask propagation and DiffuEraser inpainting — project page with qualitative <code>mask_vis</code> and quantitative summaries on DAVIS.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="abstract" class="section">
+  <div class="container is-max-desktop content">
+    <h2 class="title is-3">Abstract</h2>
+    <div class="content has-text-justified">
+      <p>
+        Video object removal requires temporally stable segmentation of a target region together with plausible inpainting of the occluded background.
+        Strong video segmenters typically assume explicit user interaction on the first frame, while geometry-aware motion cues can propose foreground-like regions automatically but often yield fragmented masks or weak alignment with object boundaries when a single salient instance must be removed.
+      </p>
+      <p>
+        This project studies a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>SAM3</strong> mask propagation (including a <strong>two-stage automatic anchoring</strong> merge when applicable) and <strong>DiffuEraser</strong> diffusion-based inpainting.
+        VGGT4D produces per-frame dynamic masks; they are fused into an initialization that prompts SAM3 for refined instance masks over time; DiffuEraser then inpaints conditioned on the mask sequence.
+        Compared with feeding raw VGGT-style dynamic masks directly to the inpainter, SAM3 refinement improves single-object masks and temporal stability; compared with interactive-only setups, the pipeline derives prompts from motion priors without manual clicks or boxes.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="method" class="section hero is-light is-small">
+  <div class="container is-max-desktop content">
+    <h2 class="title is-3">Method</h2>
+    <p class="mb-5">
+      Below: end-to-end stages from RGB video to edited video (motion prior → initialization → SAM3 VOS → post-process → inpainting), and the two-stage re-anchoring idea used to stabilize automatic mask propagation.
+    </p>
+    <div class="columns is-centered">
+      <div class="column">
+        <figure class="image">
+          <img src="./assets/pipeline.png" alt="Pipeline overview: VGGT4D, init mask, SAM3 two-stage VOS, post-process, DiffuEraser">
+        </figure>
+        <p class="is-size-7 has-text-centered mt-2">Figure 1 — Full automatic removal pipeline.</p>
+      </div>
+    </div>
+    <div class="columns is-centered mt-5">
+      <div class="column">
+        <figure class="image">
+          <img src="./assets/2stage.png" alt="Two-stage automatic anchoring for SAM3 mask propagation">
+        </figure>
+        <p class="is-size-7 has-text-centered mt-2">Figure 2 — Two-stage automatic anchoring (anchor selection and sequence merge).</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="experiments" class="section">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3">Experiments</h2>
+    <p class="content">
+      For each DAVIS sequence we visualize <strong>mask propagation</strong> outputs (<code>mask_vis.mp4</code>) for <strong>Ours</strong> (<code>vggt4d_sam3_diffueraser</code>) and four reference pipelines.
+      Use the carousel controls to slide through methods. Videos are served from <code>./assets/</code>; see <a href="./assets/README.md">assets/README.md</a> for naming and how to refresh from <code>outputs/compare/...</code>.
+    </p>
+
+    <h3 class="title is-4 mt-5">bmx-trees</h3>
+    <div class="carousel results-carousel mb-6">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_bmx-trees_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_bmx-trees_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_bmx-trees_vggt4d_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_bmx-trees_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_bmx-trees_yolo_sam2.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h3 class="title is-4">tennis</h3>
+    <div class="carousel results-carousel mb-6">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_tennis_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_tennis_yolo_sam2.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h3 class="title is-4">scooter-board</h3>
+    <div class="carousel results-carousel mb-6">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
+          <source src="./assets/mask_vis_scooter-board_yolo_sam2.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h3 class="title is-4">Quantitative comparison</h3>
+    <p class="content is-size-7">
+      Mask metrics <em>J<sub>m</sub></em>, <em>J<sub>r</sub></em> and inpainting fidelity PSNR / SSIM from each sequence <code>summary/combined.md</code> (evaluate script output). Values rounded for display.
+    </p>
+    <div class="table-container">
+      <table class="table is-bordered is-striped is-narrow is-size-7">
+        <thead>
+          <tr>
+            <th>Sequence</th>
+            <th>Method</th>
+            <th><em>J<sub>m</sub></em></th>
+            <th><em>J<sub>r</sub></em></th>
+            <th>PSNR</th>
+            <th>SSIM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>bmx-trees</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.605</td><td>0.800</td><td>25.589</td><td>0.871</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_trackanything</td><td>0.264</td><td>0.000</td><td>25.644</td><td>0.939</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_diffueraser</td><td>0.158</td><td>0.050</td><td>22.099</td><td>0.780</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_sam3_propainter</td><td>0.605</td><td>0.800</td><td>26.891</td><td>0.957</td></tr>
+          <tr><td>bmx-trees</td><td>yolo_sam2</td><td>0.638</td><td>0.900</td><td>26.915</td><td>0.958</td></tr>
+          <tr><td>tennis</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.816</td><td>1.000</td><td>21.869</td><td>0.878</td></tr>
+          <tr><td>tennis</td><td>vggt4d_trackanything</td><td>0.876</td><td>1.000</td><td>22.262</td><td>0.943</td></tr>
+          <tr><td>tennis</td><td>vggt4d_diffueraser</td><td>0.600</td><td>0.771</td><td>22.515</td><td>0.877</td></tr>
+          <tr><td>tennis</td><td>vggt4d_sam3_propainter</td><td>0.816</td><td>1.000</td><td>22.136</td><td>0.941</td></tr>
+          <tr><td>tennis</td><td>yolo_sam2</td><td>0.897</td><td>1.000</td><td>22.208</td><td>0.942</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.176</td><td>0.154</td><td>27.838</td><td>0.922</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_trackanything</td><td>0.660</td><td>0.791</td><td>28.788</td><td>0.945</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_diffueraser</td><td>0.169</td><td>0.011</td><td>20.137</td><td>0.839</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_sam3_propainter</td><td>0.176</td><td>0.154</td><td>32.733</td><td>0.976</td></tr>
+          <tr><td>scooter-board</td><td>yolo_sam2</td><td>0.655</td><td>0.780</td><td>28.719</td><td>0.945</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="content is-size-7 has-text-grey">
+      更新中：重新跑 compare 后请同步修改上表与各序列 <code>combined.md</code> 一致。
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="content has-text-centered">
+    <p>
+      <a href="https://github.com/CosmosMount/dynamic-object-removal" target="_blank" rel="noopener">Repository</a>
+      · Deploy with GitHub Actions (<code>page/</code> as site root).
+    </p>
+  </div>
+</footer>
+</body>
+</html>
