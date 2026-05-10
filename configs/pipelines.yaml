@@ -12,6 +12,7 @@
 #   cc_max_objects: int
 #   cc_close_kernel: int
 #   max_frames_for_vggt: int       # vggt4d: 前 N 帧；vggt_framewise: 子采样上限
+#   vggt_chunk_size: int           # vggt4d: 与 object-removal VGGT_CHUNK_SIZE 分块跑 demo_vggt4d；默认 20；0=整段一批
 #   init_frame: int                # 仅 vggt4d：全序列帧号
 #   tail_policy: hold_last|zeros   # 仅 vggt_framewise
 #
@@ -25,7 +26,12 @@
 #   score_thresh: float
 #
 # diffueraser: 当 inpaint: diffueraser（其余权重路径仍用 repo/ckpts/diffueraser/weights/）
-#   video_length, mask_dilation_iter, max_img_size, ref_stride, neighbor_length, subvideo_length
+#   video_length 省略时按 object-removal：ceil(帧数/24)；可写死如 video_length: 10
+#   mask_dilation_iter: DiffuEraser read_mask 里膨胀次数；洞扩太大易把背景人吃进修复区→拉丝；默认 0，需略扩洞可 2–4
+#   mask_hole_shrink_iters: 送入 Diffu 前对二值 mask 做 3×3 腐蚀次数，收紧洞沿（默认 2）；显式写 0 可关闭
+#   ref_stride / neighbor_length: ProPainter priori 参考帧；略减 ref_stride、略增 neighbor 有时更稳背景
+#   subvideo_length: 光流子段长度；过长偶发拖影可略减
+#   max_img_size: 降分辨率有时减轻幻觉，代价是细节
 #
 # propainter: 当 inpaint: propainter
 #   resize_ratio, subvideo_length, neighbor_length, raft_iter, fp16, save_frames
@@ -63,6 +69,7 @@ pipelines:
     vggt4d:
       dyn_threshold_scale: 0.7
       max_frames_for_vggt: 20
+      vggt_chunk_size: 20
 
   vggt4d:
     mask: vggt_framewise
@@ -89,11 +96,11 @@ pipelines:
       max_frames_for_vggt: 20
       tail_policy: hold_last
     diffueraser:
-      video_length: 10
-      mask_dilation_iter: 8
+      # video_length 省略时与 object-removal 脚本一致：ceil(帧数/24)；需固定秒数可写 video_length: 10
+      mask_dilation_iter: 4
       max_img_size: 960
-      ref_stride: 10
-      neighbor_length: 10
+      ref_stride: 8
+      neighbor_length: 12
       subvideo_length: 50
 
   vggt4d_sam3_propainter:
@@ -109,6 +116,7 @@ pipelines:
       cc_max_objects: 64
       cc_close_kernel: 0
       max_frames_for_vggt: 20
+      vggt_chunk_size: 20
     sam3:
       checkpoint: ckpts/sam3/sam3.pt
       two_stage_anchor_idx: auto
@@ -138,6 +146,7 @@ pipelines:
       cc_max_objects: 64
       cc_close_kernel: 0
       max_frames_for_vggt: 20
+      vggt_chunk_size: 20
     sam3:
       checkpoint: ckpts/sam3/sam3.pt
       two_stage_anchor_idx: auto
@@ -147,8 +156,7 @@ pipelines:
       two_stage_auto_min_fg_pixels: 64
       score_thresh: 0.0
     diffueraser:
-      video_length: 10
-      mask_dilation_iter: 8
+      mask_dilation_iter: 6
       max_img_size: 960
       ref_stride: 10
       neighbor_length: 10

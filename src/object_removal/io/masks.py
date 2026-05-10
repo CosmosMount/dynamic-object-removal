@@ -94,6 +94,24 @@ def init_masks_dir_has_any_foreground_png(init_masks_dir: Path) -> bool:
     return False
 
 
+def write_eroded_binary_mask_pngs(*, src_dir: Path, dst_dir: Path, iterations: int) -> Path:
+    """Copy mask PNGs from ``src_dir`` to ``dst_dir`` with ``iterations`` of 3×3 binary erosion.
+
+    Foreground (value > 0) is treated as the inpaint hole; erosion shrinks that region.
+    """
+    import cv2
+
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    for path in list_mask_files(src_dir):
+        m = read_mask_u8(path)
+        b = to_binary_255(m)
+        if iterations > 0:
+            b = cv2.erode(b, kernel, iterations=iterations)
+        write_mask_u8(dst_dir / path.name, b)
+    return dst_dir
+
+
 def init_masks_sufficient_for_track(frames_dir: Path, init_masks_dir: Path, track_method: str) -> bool:
     """Whether init masks are non-empty for this tracker (SAM2/optflow need frame 0; SAM3/identity allow any frame index)."""
     tm = (track_method or "").strip().lower()

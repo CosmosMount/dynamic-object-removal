@@ -34,6 +34,8 @@ def mask_argv_from_vggt_opts(opts: Optional[Dict[str, Any]], *, mask_method: str
         out += ["--vggt4d-cc-close-kernel", str(_i("cc_close_kernel"))]
     if opts.get("max_frames_for_vggt") is not None:
         out += ["--vggt4d-max-frames", str(_i("max_frames_for_vggt"))]
+    if opts.get("vggt_chunk_size") is not None:
+        out += ["--vggt4d-chunk-size", str(_i("vggt_chunk_size"))]
     if mask_method == "vggt4d" and opts.get("init_frame") is not None:
         out += ["--vggt4d-init-frame", str(_i("init_frame"))]
     if opts.get("tail_policy") is not None:
@@ -42,12 +44,13 @@ def mask_argv_from_vggt_opts(opts: Optional[Dict[str, Any]], *, mask_method: str
 
 
 def inpaint_argv_from_diffueraser_opts(opts: Optional[Dict[str, Any]]) -> List[str]:
-    if not opts:
+    if opts is None:
         return []
     out: List[str] = []
     mapping = [
         ("video_length", "--diffueraser-video-length", int),
         ("mask_dilation_iter", "--diffueraser-mask-dilation-iter", int),
+        ("mask_hole_shrink_iters", "--diffueraser-mask-hole-shrink-iters", int),
         ("max_img_size", "--diffueraser-max-img-size", int),
         ("ref_stride", "--diffueraser-ref-stride", int),
         ("neighbor_length", "--diffueraser-neighbor-length", int),

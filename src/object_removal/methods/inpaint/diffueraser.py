@@ -10,10 +10,10 @@ from object_removal.utils.video import reencode_mp4_h264_inplace
 @dataclass(frozen=True)
 class Params:
     video_length: int = 10
-    mask_dilation_iter: int = 8
+    mask_dilation_iter: int = 0
     max_img_size: int = 960
-    ref_stride: int = 10
-    neighbor_length: int = 10
+    ref_stride: int = 8
+    neighbor_length: int = 12
     subvideo_length: int = 50
     base_model_path: Path | None = None
     vae_path: Path | None = None

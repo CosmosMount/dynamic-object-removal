@@ -332,9 +332,11 @@ def main() -> None:
         vggt4d_opts = spec.get("vggt4d") if mask_method == "vggt4d" and isinstance(spec.get("vggt4d"), dict) else None
         if mask_method == "vggt_framewise" and isinstance(spec.get("vggt4d"), dict):
             vggt4d_opts = spec.get("vggt4d")
-        diffueraser_opts = (
-            spec.get("diffueraser") if inpaint_method == "diffueraser" and isinstance(spec.get("diffueraser"), dict) else None
-        )
+        if inpaint_method == "diffueraser":
+            raw_de = spec.get("diffueraser")
+            diffueraser_opts = dict(raw_de) if isinstance(raw_de, dict) else {}
+        else:
+            diffueraser_opts = None
         propainter_opts = (
             spec.get("propainter") if inpaint_method == "propainter" and isinstance(spec.get("propainter"), dict) else None
         )
@@ -571,7 +573,7 @@ def main() -> None:
                         inpaint_method,
                         *([] if not overwrite else ["--overwrite"]),
                     ]
-                    if diffueraser_opts:
+                    if inpaint_method == "diffueraser":
                         inpaint_argv += inpaint_argv_from_diffueraser_opts(diffueraser_opts)
                     if propainter_opts:
                         inpaint_argv += inpaint_argv_from_propainter_opts(propainter_opts)

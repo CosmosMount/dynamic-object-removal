@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
+import shutil
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
+from object_removal.io.masks import write_eroded_binary_mask_pngs
 from object_removal.io.manifest import write_method_manifest
 from object_removal.methods.inpaint import handcrafted, propainter, diffueraser
 from object_removal.methods.inpaint.handcrafted import BaselineInpaintParams
@@ -56,8 +59,6 @@ def run_inpaint_stage(
         pp_frames = Path(meta.get("frames_out", ""))
         if pp_frames.is_dir():
             # copy as %05d.png to out_dir
-            import shutil
-
             out_dir.mkdir(parents=True, exist_ok=True)
             srcs = sorted([p for p in pp_frames.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
             for i, p in enumerate(srcs):
@@ -68,11 +69,29 @@ def run_inpaint_stage(
     if method == "diffueraser":
         # prepare inputs for diffueraser
         tmp = layout.inpaint_dir / "diffueraser"
+        if overwrite and tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True, exist_ok=True)
         input_video = tmp / "input_video.mp4"
         input_mask = tmp / "input_mask.mp4"
+        _de_def = {
+            "mask_dilation_iter": 0,
+            "mask_hole_shrink_iters": 2,
+            "max_img_size": 960,
+            "ref_stride": 8,
+            "neighbor_length": 12,
+            "subvideo_length": 50,
+        }
+        raw_do = dict(diffueraser_options or {})
+        do = {**_de_def, **{k: v for k, v in raw_do.items() if v is not None}}
+        hole_shrink = int(do.pop("mask_hole_shrink_iters", 0) or 0)
+        masks_in = masks_dir
+        if hole_shrink > 0:
+            tight = tmp / "masks_hole_shrink"
+            write_eroded_binary_mask_pngs(src_dir=masks_dir, dst_dir=tight, iterations=hole_shrink)
+            masks_in = tight
         frames_to_mp4(frames_dir, input_video, fps=24.0)
-        masks_to_mp4(masks_dir, input_mask, fps=24.0)
+        masks_to_mp4(masks_in, input_mask, fps=24.0)
         reencode_mp4_h264_inplace(input_video)
         reencode_mp4_h264_inplace(input_mask)
         repo_root = Path.cwd()
@@ -84,10 +103,28 @@ def run_inpaint_stage(
             diffueraser_path=w / "diffuEraser",
             propainter_model_dir=w / "propainter",
         )
-        do = diffueraser_options or {}
+        # object-removal vggt4dsam3_diffueraser.sh: video_length = ceil(n_frames / fps) when unset (fps=24).
+        fps_de = 24.0
+        vid_n = len(
+            sorted(
+                p
+                for p in frames_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+            )
+        )
+        mask_n = len(sorted(masks_in.glob("*.png")))
+        n_pair = min(vid_n, mask_n)
+        if "video_length" not in do and n_pair > 0:
+            do["video_length"] = max(1, int(math.ceil(n_pair / fps_de)))
         skip_paths = {"base_model_path", "vae_path", "diffueraser_path", "propainter_model_dir"}
         allowed_de = {f.name for f in fields(diffueraser.Params)} - skip_paths
         params = replace(base_de, **{k: v for k, v in do.items() if k in allowed_de})
+        print(
+            f"[inpaint] diffueraser: mask_dilation_iter={params.mask_dilation_iter} "
+            f"mask_hole_shrink_iters={hole_shrink} ref_stride={params.ref_stride} "
+            f"neighbor_length={params.neighbor_length} max_img_size={params.max_img_size} "
+            f"video_length={params.video_length}"
+        )
         meta = diffueraser.run(repo_root=repo_root, input_video=input_video, input_mask=input_mask, out_dir=tmp, params=params)
         # extract frames to canonical
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -36,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="When --method vggt4d: first N frames fed to VGGT (object-removal style). vggt_framewise: uniform subsample cap.",
     )
     p.add_argument(
+        "--vggt4d-chunk-size",
+        type=int,
+        default=None,
+        help="When --method vggt4d: VGGT_CHUNK_SIZE chunking (object-removal); 0 = one chunk. Default from Params if omitted.",
+    )
+    p.add_argument(
         "--vggt4d-dyn-threshold-scale",
         type=float,
         default=None,
@@ -81,6 +87,8 @@ def main() -> None:
             vggt4d_options["init_frame"] = int(args.vggt4d_init_frame)
         if args.vggt4d_max_frames is not None:
             vggt4d_options["max_frames_for_vggt"] = int(args.vggt4d_max_frames)
+        if args.vggt4d_chunk_size is not None:
+            vggt4d_options["vggt_chunk_size"] = int(args.vggt4d_chunk_size)
         if args.vggt4d_dyn_threshold_scale is not None:
             vggt4d_options["dyn_threshold_scale"] = float(args.vggt4d_dyn_threshold_scale)
         if args.vggt4d_threshold is not None:

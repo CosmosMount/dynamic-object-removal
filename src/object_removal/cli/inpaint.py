@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overwrite", action="store_true", default=False)
     p.add_argument("--diffueraser-video-length", type=int, default=None)
     p.add_argument("--diffueraser-mask-dilation-iter", type=int, default=None)
+    p.add_argument("--diffueraser-mask-hole-shrink-iters", type=int, default=None)
     p.add_argument("--diffueraser-max-img-size", type=int, default=None)
     p.add_argument("--diffueraser-ref-stride", type=int, default=None)
     p.add_argument("--diffueraser-neighbor-length", type=int, default=None)
@@ -46,6 +47,8 @@ def main() -> None:
             diffueraser_options["video_length"] = int(args.diffueraser_video_length)
         if args.diffueraser_mask_dilation_iter is not None:
             diffueraser_options["mask_dilation_iter"] = int(args.diffueraser_mask_dilation_iter)
+        if args.diffueraser_mask_hole_shrink_iters is not None:
+            diffueraser_options["mask_hole_shrink_iters"] = int(args.diffueraser_mask_hole_shrink_iters)
         if args.diffueraser_max_img_size is not None:
             diffueraser_options["max_img_size"] = int(args.diffueraser_max_img_size)
         if args.diffueraser_ref_stride is not None:

@@ -22,6 +22,9 @@ class Params:
     cc_close_kernel: int = 0
     # VGGT4D loads all frames into GPU memory; cap to the **first** N frames (same as object-removal vggt4dsam3*.sh).
     max_frames_for_vggt: int = 20
+    # object-removal VGGT_CHUNK_SIZE: run demo_vggt4d on chunks of this many frames, stitch dynamic_mask_*.png.
+    # 0 or negative = one chunk of all capped frames (no sub-chunking).
+    vggt_chunk_size: int = 20
     # Full-sequence frame index: pick nearest subsampled VGGT slot, write init mask as NNNNN.png on that frame.
     init_frame: Optional[int] = None
 
@@ -167,47 +170,34 @@ def _gen_init_mask_from_scene(
         best_indexed = bin0.astype(np.uint8)
         orig_out = _orig_for_slot(best_slot)
     elif p.merge_all:
+        # Same selection as object-removal pipelines/vggt4dsam3/gen_first_mask_from_vggt.py --merge_all
         merged = None
-        per_frame: List[Tuple[str, int, np.ndarray]] = []
+        per_frame: List[Tuple[str, np.ndarray]] = []
         for name in sorted(candidates, key=_slot_from_dynamic_mask_name):
-            slot = _slot_from_dynamic_mask_name(name)
             binary = _dynamic_mask_png_to_binary(scene_output / name, thr)
             if binary is None:
                 continue
-            per_frame.append((name, slot, binary))
+            per_frame.append((name, binary))
             merged = binary if merged is None else np.maximum(merged, binary)
         if merged is None or not per_frame:
             raise RuntimeError(f"Failed to read any dynamic mask from {scene_output}")
 
-        by_slot = {slot: binary for _name, slot, binary in per_frame}
-        best_indexed: np.ndarray
-        orig_out: int
+        n_merged = _count_components_ge_area(merged, min_a, ck)
+        best_indexed = merged
+        best_slot = 0
+        best_n = n_merged
+        best_fg = int(merged.sum())
 
-        # Prefer VGGT slot 0 when it has foreground (BGRA-safe read); else competition / merged naming.
-        b0 = by_slot.get(0)
-        if b0 is not None and int((b0 > 0).sum()) > 0:
-            best_indexed = b0
-            orig_out = _orig_for_slot(0)
-        else:
-            n_merged = _count_components_ge_area(merged, min_a, ck)
-            best_indexed = merged
-            best_slot = max(per_frame, key=lambda t: int(t[2].sum()))[1]
-            best_n = n_merged
-            best_fg = int(merged.sum())
+        for name, binary in per_frame:
+            nf = _count_components_ge_area(binary, min_a, ck)
+            fg = int(binary.sum())
+            if nf > best_n or (nf == best_n and nf > 0 and fg > best_fg):
+                best_n = nf
+                best_fg = fg
+                best_indexed = binary
+                best_slot = _slot_from_dynamic_mask_name(name)
 
-            for _name, slot, binary in per_frame:
-                nf = _count_components_ge_area(binary, min_a, ck)
-                fg = int(binary.sum())
-                if nf > best_n or (nf == best_n and nf > 0 and fg > best_fg):
-                    best_n = nf
-                    best_fg = fg
-                    best_indexed = binary
-                    best_slot = slot
-
-            if np.array_equal(best_indexed, merged):
-                orig_out = _orig_for_slot(0)
-            else:
-                orig_out = _orig_for_slot(best_slot)
+        orig_out = _orig_for_slot(best_slot)
     else:
         best_area = -1
         best_indexed: Optional[np.ndarray] = None
@@ -231,7 +221,6 @@ def _gen_init_mask_from_scene(
             raise RuntimeError(f"Failed to read any dynamic mask from {scene_output}")
         orig_out = _orig_for_slot(best_slot)
 
-    pre_split = best_indexed.copy()
     if p.split_cc:
         best_indexed, _ = _split_binary_into_instances(
             best_indexed,
@@ -239,8 +228,6 @@ def _gen_init_mask_from_scene(
             max_objects=int(p.cc_max_objects),
             close_kernel=ck,
         )
-    if int((best_indexed > 0).sum()) == 0 and int((pre_split > 0).sum()) > 0:
-        best_indexed = (pre_split > 0).astype(np.uint8)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{orig_out:05d}.png"
@@ -248,6 +235,72 @@ def _gen_init_mask_from_scene(
     if not ok:
         raise RuntimeError(f"Failed to write init mask: {out_path}")
     return out_path
+
+
+def _run_vggt4d_chunked(
+    *,
+    frame_files: List[Path],
+    n_use: int,
+    scene_name: str,
+    chunks_parent: Path,
+    out_scene_root: Path,
+    dyn_threshold_scale: float,
+    chunk_size: int,
+) -> Path:
+    """Match object-removal vggt4dsam3_diffueraser.sh: chunked demo_vggt4d + global dynamic_mask_*.png indices."""
+    import demo_vggt4d  # type: ignore
+
+    scene_out = out_scene_root / scene_name
+    scene_out.mkdir(parents=True, exist_ok=True)
+    for p in scene_out.glob("dynamic_mask_*.png"):
+        p.unlink(missing_ok=True)
+
+    if chunks_parent.exists():
+        shutil.rmtree(chunks_parent, ignore_errors=True)
+    chunks_parent.mkdir(parents=True, exist_ok=True)
+
+    cs = int(chunk_size)
+    if cs <= 0:
+        cs = max(1, n_use)
+    else:
+        cs = max(1, cs)
+
+    start = 0
+    while start < n_use:
+        end = min(start + cs, n_use)
+        chunk_root = chunks_parent / f"chunk_{start}_{end}"
+        chunk_input = chunk_root / "input"
+        chunk_scene = chunk_input / scene_name
+        chunk_out = chunk_root / "output"
+        if chunk_root.exists():
+            shutil.rmtree(chunk_root, ignore_errors=True)
+        chunk_scene.mkdir(parents=True, exist_ok=True)
+
+        for j in range(start, end):
+            src = frame_files[j]
+            dst = chunk_scene / src.name
+            dst.symlink_to(src.resolve())
+
+        demo_vggt4d.main(str(chunk_input), str(chunk_out), dyn_threshold_scale=float(dyn_threshold_scale))
+
+        chunk_scene_out = chunk_out / scene_name
+        if not chunk_scene_out.is_dir():
+            raise RuntimeError(f"VGGT chunk missing output dir: {chunk_scene_out}")
+
+        local_masks = sorted(chunk_scene_out.glob("dynamic_mask_*.png"))
+        expected_n = end - start
+        if len(local_masks) != expected_n:
+            raise RuntimeError(
+                f"VGGT chunk mask count mismatch for {start}:{end}: got {len(local_masks)}, expected {expected_n}"
+            )
+
+        for j, lm in enumerate(local_masks):
+            global_idx = start + j
+            shutil.copy2(lm, scene_out / f"dynamic_mask_{global_idx:04d}.png")
+
+        start = end
+
+    return scene_out
 
 
 def run(*, repo_root: Path, frames_dir: Path, out_scene_dir: Path, out_init_dir: Path, params: Params) -> dict:
@@ -259,27 +312,13 @@ def run(*, repo_root: Path, frames_dir: Path, out_scene_dir: Path, out_init_dir:
         sys.path.insert(0, str(vggt_root))
 
     scene_name = frames_dir.name
-    tmp_input = out_scene_dir.parent / "vggt_input"
-    tmp_input.mkdir(parents=True, exist_ok=True)
-    scene_dir = tmp_input / scene_name
-    if scene_dir.is_symlink():
-        scene_dir.unlink()
-    elif scene_dir.is_dir():
-        for p in scene_dir.iterdir():
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=False)
-            else:
-                p.unlink(missing_ok=True)
-    scene_dir.mkdir(parents=True, exist_ok=True)
 
     all_frames = sorted([p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}])
     if not all_frames:
         raise RuntimeError(f"No frames found in {frames_dir}")
 
     max_n = int(params.max_frames_for_vggt)
-    # Match object-removal vggt4dsam3*.sh when VGGT_MAX_FRAMES caps input: **first N frames** (not linspace).
-    # Note: that shell can also run **chunked** VGGT over all frames when N is large; this path is one GPU batch
-    # (OOM risk if you set max_frames_for_vggt very high on long clips).
+    # Match object-removal vggt4dsam3*.sh: first N frames when TOTAL > max_n.
     if max_n > 0 and len(all_frames) > max_n:
         n_use = max_n
         slot_to_orig = list(range(n_use))
@@ -288,16 +327,17 @@ def run(*, repo_root: Path, frames_dir: Path, out_scene_dir: Path, out_init_dir:
         slot_to_orig = list(range(len(all_frames)))
         frame_files = all_frames
 
-    for src in frame_files:
-        dst = scene_dir / src.name
-        if not dst.exists():
-            os.symlink(str(src.resolve()), str(dst))
-
-    import demo_vggt4d  # type: ignore
-
     out_scene_root = out_scene_dir.parent / "vggt_output"
-    demo_vggt4d.main(str(tmp_input), str(out_scene_root), dyn_threshold_scale=float(params.dyn_threshold_scale))
-    scene_out = out_scene_root / scene_name
+    chunks_parent = out_scene_dir.parent / "vggt_chunks"
+    scene_out = _run_vggt4d_chunked(
+        frame_files=frame_files,
+        n_use=len(frame_files),
+        scene_name=scene_name,
+        chunks_parent=chunks_parent,
+        out_scene_root=out_scene_root,
+        dyn_threshold_scale=float(params.dyn_threshold_scale),
+        chunk_size=int(params.vggt_chunk_size),
+    )
 
     init_mask_path = _gen_init_mask_from_scene(scene_out, out_init_dir, params, slot_to_orig)
     return {
@@ -329,12 +369,19 @@ def main() -> None:
         default=20,
         help="Max frames passed to VGGT: first N frames of the clip (0 = all; may OOM).",
     )
+    ap.add_argument(
+        "--vggt4d-chunk-size",
+        type=int,
+        default=20,
+        help="VGGT demo chunk size (object-removal VGGT_CHUNK_SIZE); 0 = one chunk of all capped frames.",
+    )
     args = ap.parse_args()
 
     p = Params(
         dyn_threshold_scale=args.dyn_threshold_scale,
         init_frame=args.init_frame,
         max_frames_for_vggt=int(args.max_frames_for_vggt),
+        vggt_chunk_size=int(args.vggt4d_chunk_size),
     )
     run(
         repo_root=Path(args.repo_root),

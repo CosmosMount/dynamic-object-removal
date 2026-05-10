@@ -26,6 +26,8 @@ def _ffmpeg_mux_images_to_h264(
     out_mp4: Path,
     *,
     fps: float,
+    crf: int = 20,
+    preset: str = "medium",
 ) -> None:
     """Mux sorted images to one H.264 MP4 (yuv420p + faststart). Uses a temp %06d symlink chain."""
     if not image_paths:
@@ -44,28 +46,33 @@ def _ffmpeg_mux_images_to_h264(
             except OSError:
                 shutil.copy2(src, dst)
         inp = str(td / f"%06d{ext}")
+        # Even dimensions: match object-removal vggt4dsam3_diffueraser.sh (ceil(iw/2)*2), not trunc.
+        vf = "format=yuv420p,scale=ceil(iw/2)*2:ceil(ih/2)*2"
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(float(fps)),
+            "-i",
+            inp,
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-crf",
+            str(int(crf)),
+            "-preset",
+            str(preset),
+            str(out_mp4),
+        ]
         p = subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-loglevel",
-                "error",
-                "-framerate",
-                str(float(fps)),
-                "-i",
-                inp,
-                "-vf",
-                "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                "-crf",
-                "20",
-                str(out_mp4),
-            ],
+            cmd,
             capture_output=True,
             text=True,
         )
@@ -90,7 +97,7 @@ def frames_to_mp4(frames_dir: Path, out_mp4: Path, *, fps: float = 24.0) -> None
     ffmpeg = resolve_ffmpeg()
     if ffmpeg:
         try:
-            _ffmpeg_mux_images_to_h264(ffmpeg, files, out_mp4, fps=fps)
+            _ffmpeg_mux_images_to_h264(ffmpeg, files, out_mp4, fps=fps, crf=20, preset="medium")
             return
         except Exception as exc:
             print(f"[object_removal] ffmpeg mux frames failed, falling back to OpenCV: {exc}", file=sys.stderr)
@@ -129,7 +136,8 @@ def masks_to_mp4(masks_dir: Path, out_mp4: Path, *, fps: float = 24.0) -> None:
     ffmpeg = resolve_ffmpeg()
     if ffmpeg:
         try:
-            _ffmpeg_mux_images_to_h264(ffmpeg, files, out_mp4, fps=fps)
+            # object-removal DiffuEraser mask mp4: lossless H.264 (crf 0) + veryfast preset
+            _ffmpeg_mux_images_to_h264(ffmpeg, files, out_mp4, fps=fps, crf=0, preset="veryfast")
             return
         except Exception as exc:
             print(f"[object_removal] ffmpeg mux masks failed, falling back to OpenCV: {exc}", file=sys.stderr)
@@ -219,7 +227,7 @@ def reencode_mp4_h264_inplace(path: Path, *, crf: int = 20) -> bool:
         )
         return False
     tmp = path.with_name(path.stem + "._reencode_.mp4")
-    vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    vf = "scale=ceil(iw/2)*2:ceil(ih/2)*2"
     try:
         p = subprocess.run(
             [
