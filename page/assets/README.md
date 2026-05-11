@@ -1,34 +1,21 @@
-# page/assets 媒体命名
+# page/assets 媒体
 
-页面使用相对路径 `./assets/...`。
+- **图片**：`images/`（如 `pipeline.png`、`2stage.png`、`logo.png`、`logo-title.png`）
+- **视频**：`video/`（`inpaint_<序列>_<管线>.mp4`、`mask_vis_<序列>_<管线>.mp4`）
 
-## 示意图
-
-| 文件 | 说明 |
-|------|------|
-| `pipeline.png` | 六阶段总览 |
-| `2stage.png` | SAM3 两阶段锚定示意 |
-
-## Inpainting 成片（最终去物体视频）
+## Inpainting 成片
 
 命名：`inpaint_<序列名>_<pipeline_id>.mp4`
 
-| 管线 | 源文件（`outputs/compare/<seq>/runs/<pid>/...`） |
+| 管线 | 源路径（`outputs/compare/<seq>/runs/<pid>/...`） |
 |------|--------------------------------------------------|
 | `vggt4d_sam3_diffueraser`、`vggt4d_diffueraser` | `inpaint/diffueraser/diffueraser_result.mp4` |
 | `vggt4d_trackanything`、`vggt4d_sam3_propainter`、`yolo_sam2` | `inpaint/propainter/<序列名>/inpaint_out.mp4` |
 
-示例：
+## mask_vis
 
-```bash
-SEQ=bear
-PID=vggt4d_sam3_diffueraser
-cp "outputs/compare/$SEQ/runs/$PID/inpaint/diffueraser/diffueraser_result.mp4" \
-   "page/assets/inpaint_${SEQ}_${PID}.mp4"
-```
+`mask_vis_<序列>_<pipeline_id>.mp4` ← `runs/<pid>/track/mask_vis.mp4`
 
-## mask_vis（掩码传播可视化）
+## Favicon
 
-仅 **tennis**、**scooter-board** 在页面上展示（命名不变）：
-
-`mask_vis_<序列名>_<pipeline_id>.mp4` ← `runs/<pid>/track/mask_vis.mp4`
+浏览器标签图标使用 `images/logo.png`。

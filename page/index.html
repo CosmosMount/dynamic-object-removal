@@ -3,29 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Automatic video object removal: VGGT4D motion priors, SAM3 two-stage mask propagation, DiffuEraser inpainting.">
-  <title>Automatic Video Object Removal — Project Page</title>
+  <meta name="description" content="DynaClear: Automatic video object removal and inpainting framework. VGGT4D, SAM3, DiffuEraser.">
+  <title>DynaClear</title>
   <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans" rel="stylesheet">
   <link rel="stylesheet" href="./static/css/bulma.min.css">
   <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
   <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
   <link rel="stylesheet" href="./static/css/index.css">
-  <link rel="icon" href="./static/images/favicon.svg">
+  <link rel="icon" type="image/png" href="./assets/images/logo.png">
+  <script>
+    window.MathJax = {
+      loader: { load: ['[tex]/ams'] },
+      tex: {
+        packages: { '[+]': ['ams'] },
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+      },
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" id="MathJax-script"></script>
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <script defer src="./static/js/fontawesome.all.min.js"></script>
   <script src="./static/js/bulma-carousel.min.js"></script>
   <script src="./static/js/index.js"></script>
 </head>
-<body>
+<body class="project-page">
 <!--
-  Inpaint: ./assets/inpaint_<seq>_<pipeline>.mp4 (diffueraser_result or propainter inpaint_out)
-  mask_vis: ./assets/mask_vis_<seq>_<pipeline>.mp4 (tennis, scooter-board only)
-  Pipelines: vggt4d_sam3_diffueraser (Ours), vggt4d_trackanything, vggt4d_diffueraser, vggt4d_sam3_propainter, yolo_sam2
+  Videos: ./assets/video/inpaint_<seq>_<pipeline>.mp4 | mask_vis_<seq>_<pipeline>.mp4
+  Images: ./assets/images/
 -->
 
 <nav class="navbar is-light" role="navigation" aria-label="main navigation">
   <div class="navbar-brand">
-    <a class="navbar-item" href="#"><strong>Video Object Removal</strong></a>
+    <a class="navbar-item" href="#">
+      <img class="project-nav-logo" src="./assets/images/logo.png" width="28" height="28" alt="">
+      <strong>DynaClear</strong>
+    </a>
     <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
       <span aria-hidden="true"></span>
       <span aria-hidden="true"></span>
@@ -45,9 +61,12 @@
 <section class="hero is-small">
   <div class="hero-body">
     <div class="container is-max-desktop">
-      <h1 class="title is-2 publication-title">Automatic Video Object Removal</h1>
-      <p class="subtitle is-5">
-        VGGT4D-initiated SAM3 mask propagation and DiffuEraser inpainting — qualitative <strong>inpainting</strong> and <strong>mask_vis</strong> on DAVIS, plus evaluation tables.
+      <div class="project-hero-heading">
+        <img class="project-hero-logo-title" src="./assets/images/logo-title.png" alt="">
+        <h1 class="title project-hero-main-title publication-title mb-0">DynaClear: Automatic video object removal and inpainting framework</h1>
+      </div>
+      <p class="subtitle is-5 project-hero-subtitle mt-4">
+        Qualitative <strong>inpainting</strong> and <strong>mask_vis</strong> on DAVIS, with quantitative summaries.
       </p>
     </div>
   </div>
@@ -62,7 +81,7 @@
         Strong video segmenters typically assume explicit user interaction on the first frame, while geometry-aware motion cues can propose foreground-like regions automatically but often yield fragmented masks or weak alignment with object boundaries when a single salient instance must be removed.
       </p>
       <p>
-        This project studies a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>SAM3</strong> mask propagation (including a <strong>two-stage automatic anchoring</strong> merge when applicable) and <strong>DiffuEraser</strong> diffusion-based inpainting.
+        <strong>DynaClear</strong> is a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>SAM3</strong> mask propagation (including <strong>two-stage automatic anchoring</strong> when applicable) and <strong>DiffuEraser</strong> diffusion-based inpainting.
         VGGT4D produces per-frame dynamic masks; they are fused into an initialization that prompts SAM3 for refined instance masks over time; DiffuEraser then inpaints conditioned on the mask sequence.
         Compared with feeding raw VGGT-style dynamic masks directly to the inpainter, SAM3 refinement improves single-object masks and temporal stability; compared with interactive-only setups, the pipeline derives prompts from motion priors without manual clicks or boxes.
       </p>
@@ -73,25 +92,112 @@
 <section id="method" class="section hero is-light is-small">
   <div class="container is-max-desktop content">
     <h2 class="title is-3">Method</h2>
-    <p class="mb-5">
-      Below: end-to-end stages from RGB video to edited video (motion prior → initialization → SAM3 VOS → post-process → inpainting), and the two-stage re-anchoring idea used to stabilize automatic mask propagation.
+
+    <h3 class="title is-4">Problem formulation</h3>
+    <p class="has-text-justified">
+      Given a video \(\{I_t\}_{t=1}^{T}\), our goal is to produce an edited video \(\{\hat{I}_t\}_{t=1}^{T}\) where a target region \(M_t\) is removed at each frame.
+      Following the formulation in modern detection and segmentation, the system can be written as
     </p>
-    <div class="columns is-centered">
+    <div class="math-display my-4">
+      \[
+        \{M_t\}_{t=1}^{T} = \mathcal{S}(\{I_t\}_{t=1}^{T}),\quad
+        \{\hat{I}_t\}_{t=1}^{T} = \mathcal{F}(\{I_t\}_{t=1}^{T}, \{M_t\}_{t=1}^{T}),
+      \]
+    </div>
+    <p class="has-text-justified">
+      where \(\mathcal{S}\) is an automatic segmentation module and \(\mathcal{F}\) is an inpainting model.
+    </p>
+
+    <h3 class="title is-4 mt-5">Pipeline overview</h3>
+    <p class="has-text-justified">
+      Figure&nbsp;1 summarizes the full automatic route: <strong>(1)&nbsp;VGGT4D</strong> yields per-frame <em>dynamic</em> masks as a motion and geometry prior;
+      <strong>(2)</strong> that prior is fused into a single <strong>initialization mask</strong> that prompts <strong>SAM3</strong> for video object segmentation (VOS), giving refined instance-level masks over time;
+      <strong>(3)&nbsp;DiffuEraser</strong> performs diffusion-based inpainting on the propagated mask sequence.
+      The design keeps automatic “what moves” discovery from motion cues while aiming for boundary fidelity and temporal stability typical of promptable VOS.
+    </p>
+
+    <div class="columns is-centered mt-4">
       <div class="column">
         <figure class="image">
-          <img src="./assets/pipeline.png" alt="Pipeline overview: VGGT4D, init mask, SAM3 two-stage VOS, post-process, DiffuEraser">
+          <img src="./assets/images/pipeline.png" alt="Pipeline: VGGT4D, init mask, SAM3 two-stage VOS, post-process, DiffuEraser">
         </figure>
-        <p class="is-size-7 has-text-centered mt-2">Figure 1 — Full automatic removal pipeline.</p>
+        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 1 — Full automatic removal pipeline (VGGT4D + SAM3 two-stage VOS + DiffuEraser).</p>
       </div>
     </div>
-    <div class="columns is-centered mt-5">
+
+    <h3 class="title is-4 mt-5">Dynamic mask extraction with VGGT4D</h3>
+    <p class="has-text-justified">
+      We first apply <strong>VGGT4D</strong> to obtain a coarse estimate of dynamic regions.
+      By processing frames in temporal chunks and applying motion thresholds, we produce per-frame binary or soft masks \(\{\tilde{M}_t\}\) that highlight potential foreground candidates based on 4D geometry cues.
+    </p>
+
+    <h3 class="title is-4 mt-5">From dynamic masks to an initialization mask</h3>
+    <p class="has-text-justified">
+      Because promptable VOS models like <strong>SAM3</strong> require an initial object specification, we automatically fuse multiple VGGT4D outputs into a cohesive initialization mask \(M^{\mathrm{init}}\).
+      This step converts noisy, multi-object motion priors into a single, trackable foreground hypothesis.
+    </p>
+
+    <h3 class="title is-4 mt-5">Mask propagation and refinement with SAM&nbsp;3</h3>
+    <p class="has-text-justified">
+      Given the automatically constructed initialization mask \(M^{\mathrm{init}}\), we employ <strong>SAM3</strong> as a promptable VOS module to propagate an instance-level mask sequence over the entire video.
+      Concretely, we insert \(M^{\mathrm{init}}\) as an indexed mask prompt at its corresponding frame and run SAM3 tracking both forward and backward in time, producing a first-pass prediction \(\{\hat{M}^{(1)}_t\}_{t=1}^{T}\).
+    </p>
+    <p class="has-text-justified"><strong>Two-stage automatic anchoring.</strong>
+      In the absence of human prompts, promptable VOS propagation can occasionally drift to background regions, yielding near-full-frame false positives or stripe-like bands under large camera motion.
+      To stabilize the foreground while remaining fully automatic, we introduce a two-stage anchoring strategy.
+    </p>
+    <p class="has-text-justified">
+      <strong>Anchor selection (automatic).</strong>
+      From the stage-1 predictions, we select an anchor frame index \(a\) by sampling \(k\) evenly spaced candidate frames (with \(k\) clamped to \([5,7]\) when possible).
+      For each candidate, we measure the stage-1 foreground area fraction.
+      We discard candidates that are (i) near full-screen, (ii) too small to be reliable, or (iii) dominated by thin full-width/full-height stripes.
+      Among the remaining candidates, we choose the anchor with the <em>smallest</em> foreground area (ties broken toward later frames).
+    </p>
+    <p class="has-text-justified">
+      <strong>Stage-2 re-initialization + prefix merge.</strong>
+      We then re-run SAM3 using the <em>stage-1 predicted mask at the anchor frame</em> as a new prompt, producing \(\{\hat{M}^{(2)}_t\}_{t=1}^{T}\).
+      Finally, we form the output mask sequence by a simple prefix replacement:
+    </p>
+    <div class="math-display my-4">
+      \[
+        M_t =
+        \begin{cases}
+          \hat{M}^{(2)}_t, & t \le a,\\
+          \hat{M}^{(1)}_t, & t > a.
+        \end{cases}
+      \]
+    </div>
+    <p class="has-text-justified">
+      This design acts as an automatic <em>re-lock</em> of the tracked object at a reliable time while preventing over-correction from propagating through the entire sequence.
+    </p>
+
+    <div class="columns is-centered mt-4">
       <div class="column">
         <figure class="image">
-          <img src="./assets/2stage.png" alt="Two-stage automatic anchoring for SAM3 mask propagation">
+          <img src="./assets/images/2stage.png" alt="Two-stage automatic anchoring for SAM3">
         </figure>
-        <p class="is-size-7 has-text-centered mt-2">Figure 2 — Two-stage automatic anchoring (anchor selection and sequence merge).</p>
+        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 2 — Two-stage automatic anchoring (anchor selection and sequence merge).</p>
       </div>
     </div>
+
+    <h3 class="title is-4 mt-5">Post-processing and alignment</h3>
+    <p class="has-text-justified">
+      Following propagation, we convert the SAM3 outputs into standardized binary mask sequences and align them with the original video frames.
+      This step prepares the exact frame–mask pairs required by the downstream inpainting stage and generates visual overlays for qualitative evaluation.
+    </p>
+
+    <h3 class="title is-4 mt-5">Diffusion-based video inpainting with DiffuEraser</h3>
+    <p class="has-text-justified">
+      Finally, we inpaint the masked regions using <strong>DiffuEraser</strong>.
+      This module consumes the original frames \(\{I_t\}\) and refined masks \(\{M_t\}\) to synthesize the final edited video \(\{\hat{I}_t\}_{t=1}^{T}\).
+      The quality of this generative process relies heavily on diffusion priors (e.g., latent diffusion) and conditional control mechanisms.
+    </p>
+
+    <h3 class="title is-4 mt-5">Automatic baseline: VGGT-only + DiffuEraser</h3>
+    <p class="has-text-justified">
+      To isolate the value of the SAM3 refinement step, we also consider an automatic baseline that bypasses SAM3 entirely, feeding raw VGGT-derived masks \(\{\tilde{M}_t\}\) (aligned to every frame, with temporal padding when the motion prior comes from a shorter window) directly to DiffuEraser prior to inpainting.
+      While fully automatic, this VGGT-only variant is often ill-suited for strict single-object removal compared to the full pipeline.
+    </p>
   </div>
 </section>
 
@@ -99,9 +205,8 @@
   <div class="container is-max-desktop">
     <h2 class="title is-3">Experiments</h2>
     <p class="content">
-      <strong>Inpainting</strong> shows the final edited video per method on <strong>bmx-trees</strong>, <strong>tennis</strong>, <strong>scooter-board</strong>, and <strong>bear</strong>.
-      <strong>Mask visualization</strong> (<code>mask_vis.mp4</code>) is shown for <strong>tennis</strong> and <strong>scooter-board</strong> only.
-      Carousels use Bulma controls; assets live under <code>./assets/</code> — see <a href="./assets/README.md">assets/README.md</a> to refresh from <code>outputs/compare/...</code>.
+      <strong>Inpainting</strong> results (final edited video) on <strong>bmx-trees</strong>, <strong>tennis</strong>, <strong>scooter-board</strong>, <strong>bear</strong>, and <strong>cat-girl</strong>.
+      <strong>Mask visualization</strong> (<code>mask_vis.mp4</code>) on <strong>tennis</strong> and <strong>scooter-board</strong>.
     </p>
 
     <h3 class="title is-4 mt-5">Inpainting results</h3>
@@ -110,32 +215,32 @@
     <div class="carousel results-carousel mb-5">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bmx-trees_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bmx-trees_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bmx-trees_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bmx-trees_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bmx-trees_yolo_sam2.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bmx-trees_yolo_sam2.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -144,32 +249,32 @@
     <div class="carousel results-carousel mb-5">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_tennis_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_tennis_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_tennis_yolo_sam2.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_tennis_yolo_sam2.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -178,101 +283,137 @@
     <div class="carousel results-carousel mb-5">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_scooter-board_yolo_sam2.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_scooter-board_yolo_sam2.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
     <h4 class="title is-5">bear</h4>
-    <div class="carousel results-carousel mb-6">
+    <div class="carousel results-carousel mb-5">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bear_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bear_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bear_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bear_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bear_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bear_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/inpaint_bear_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bear_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <p class="is-size-7 has-text-centered px-3 py-6 has-background-light">当前 compare 未生成该 inpaint 成片；跑完后将 <code>inpaint_bear_yolo_sam2.mp4</code> 放入 <code>assets/</code> 即可。</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_bear_yolo_sam2.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">cat-girl</h4>
+    <div class="carousel results-carousel mb-6">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_cat-girl_yolo_sam2.mp4" type="video/mp4">
+        </video>
       </div>
     </div>
 
     <h3 class="title is-4">Mask propagation (<code>mask_vis</code>)</h3>
-    <p class="content is-size-7">仅展示 <strong>tennis</strong> 与 <strong>scooter-board</strong>。</p>
+    <p class="content is-size-7"><strong>tennis</strong> and <strong>scooter-board</strong>.</p>
 
     <h4 class="title is-5">tennis</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_tennis_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_tennis_yolo_sam2.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_tennis_yolo_sam2.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -281,40 +422,93 @@
     <div class="carousel results-carousel mb-6">
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
         <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
-        <video controls muted loop playsinline class="video is-block" style="width:100%;max-height:360px;">
-          <source src="./assets/mask_vis_scooter-board_yolo_sam2.mp4" type="video/mp4">
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_scooter-board_yolo_sam2.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
     <h3 class="title is-4">Quantitative comparison</h3>
-    <p class="content is-size-7">
-      与各序列 <code>outputs/compare/&lt;seq&gt;/summary/combined.md</code> 对齐：<em>J<sub>m</sub></em>、<em>J<sub>r</sub></em> 为 mask 区域指标；<strong>Mask score</strong> 与 <strong>Temp. warp</strong> 为表中的 <code>mask_score</code>、<code>temporal_warp_error_mean</code>（数值越小表示时序扭曲误差越小）。bear 的 <code>yolo_sam2</code> 行在 summary 中暂无数据。
-    </p>
+
+    <h4 class="title is-5">Mask metrics (definitions, aligned with <code>eval_stage.py</code>)</h4>
+    <div class="content has-text-justified quantitative-prose">
+      <p>
+        Let \(P_t\) and \(G_t\) denote the predicted and ground-truth <strong>binary</strong> foreground masks at frame \(t\) (after alignment and optional object merging).
+        Write \(\mathrm{IoU}_t = \lvert P_t \cap G_t \rvert \,/\, \lvert P_t \cup G_t \rvert\) (with the convention \(\mathrm{IoU}_t = 1\) if both masks are empty).
+      </p>
+      <p>
+        <strong>\(J_m\) (region similarity, <code>mask_jm</code>):</strong> per-frame IoU averaged over the sequence,
+        \[
+          J_m \;=\; \frac{1}{T}\sum_{t=1}^{T} \mathrm{IoU}_t .
+        \]
+        <strong>\(J_r\) (region “recall” style, <code>mask_jr</code>):</strong> fraction of frames with \(\mathrm{IoU}_t > 0.5\),
+        \[
+          J_r \;=\; \frac{1}{T}\sum_{t=1}^{T} \mathbf{1}\bigl[\mathrm{IoU}_t > 0.5\bigr],
+        \]
+        where \(\mathbf{1}[\cdot]\) is the indicator function (1 if true, 0 otherwise).
+      </p>
+      <p>
+        <strong>\(F_m\) (<code>mask_fm</code>)</strong> and <strong>\(F_r\) (<code>mask_fr</code>)</strong> summarize <em>boundary</em> agreement:
+        for each frame, prediction and GT boundaries are obtained from morphological gradients, optionally dilated into matching bands; precision and recall are computed on those bands, then an \(F_1\) score.
+        \(F_m\) is the mean of per-frame boundary \(F_1\); \(F_r\) is the mean of per-frame boundary recall (see implementation in <code>_boundary_f_pr</code>).
+      </p>
+      <p>
+        <strong><code>mask_score</code></strong> aggregates the available components (same piecewise rule as in code):
+      </p>
+      <div class="math-display my-3">
+        \[
+          \text{mask_score} =
+          \begin{cases}
+            \dfrac{J_m + F_m + F_r}{3}, & F_m,\,F_r\ \text{available},\\[0.6em]
+            \dfrac{J_m + F_m}{2}, & \text{only } F_m,\\[0.6em]
+            \dfrac{J_m + F_r}{2}, & \text{only } F_r,\\[0.6em]
+            \dfrac{J_m + J_r}{2}, & \text{only } J_r\ \text{(e.g. DAVIS CSV without boundary terms)},\\[0.6em]
+            J_m, & \text{otherwise.}
+          \end{cases}
+        \]
+      </div>
+      <p>
+        The table below reports \(J_m\), \(J_r\), <code>mask_score</code>, and <strong>temporal warp</strong> (<code>temporal_warp_error_mean</code>): a lower warp value indicates lower average optical-flow warping error (see evaluation pipeline for masking of hole vs background).
+      </p>
+    </div>
+
+    <h4 class="title is-5">Why we do not emphasize PSNR / SSIM for inpainting here</h4>
+    <div class="content has-text-justified quantitative-prose">
+      <p>
+        <strong>PSNR</strong> and <strong>SSIM</strong> compare predicted pixels to a single reference image (or video frame-by-frame).
+        For <em>object removal + inpainting</em>, a faithful result is <strong>not unique</strong>: many distinct inpainted backgrounds are perceptually acceptable and semantically correct, yet differ in every pixel from any one “GT” completion.
+      </p>
+      <p>
+        When <strong>no inpainted ground-truth video</strong> exists (or when only the original clip is available so the object is still present in the reference), pixel-wise metrics either cannot be defined sensibly, or they penalize valid solutions that disagree with an arbitrary reference.
+        They also conflate <em>mask errors</em> (wrong hole shape) with <em>texture choices</em> inside a correct hole.
+        For these reasons, this page highlights <strong>mask-based</strong> and <strong>temporal-consistency-oriented</strong> summaries rather than claiming PSNR/SSIM faithfully rank inpainting quality without a proper inpainting GT.
+      </p>
+    </div>
+
     <div class="table-container">
       <table class="table is-bordered is-striped is-narrow is-size-7">
         <thead>
@@ -343,17 +537,19 @@
           <tr><td>scooter-board</td><td>vggt4d_diffueraser</td><td>0.169</td><td>0.011</td><td>0.107</td><td>33.839</td></tr>
           <tr><td>scooter-board</td><td>vggt4d_sam3_propainter</td><td>0.852</td><td>0.956</td><td>0.770</td><td>35.847</td></tr>
           <tr><td>scooter-board</td><td>yolo_sam2</td><td>0.655</td><td>0.780</td><td>0.626</td><td>35.848</td></tr>
-          <tr><td>bear</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.853</td><td>1.000</td><td>0.369</td><td>18.325</td></tr>
+          <tr><td>bear</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.864</td><td>1.000</td><td>0.369</td><td>18.457</td></tr>
           <tr><td>bear</td><td>vggt4d_trackanything</td><td>0.949</td><td>1.000</td><td>0.869</td><td>16.945</td></tr>
-          <tr><td>bear</td><td>vggt4d_diffueraser</td><td>0.831</td><td>1.000</td><td>0.534</td><td>18.262</td></tr>
-          <tr><td>bear</td><td>vggt4d_sam3_propainter</td><td>0.853</td><td>1.000</td><td>0.369</td><td>16.840</td></tr>
+          <tr><td>bear</td><td>vggt4d_diffueraser</td><td>0.833</td><td>1.000</td><td>0.535</td><td>18.443</td></tr>
+          <tr><td>bear</td><td>vggt4d_sam3_propainter</td><td>0.864</td><td>1.000</td><td>0.369</td><td>16.859</td></tr>
           <tr><td>bear</td><td>yolo_sam2</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.922</td><td>1.000</td><td>0.659</td><td>26.150</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_trackanything</td><td>0.860</td><td>1.000</td><td>0.569</td><td>26.067</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_diffueraser</td><td>0.684</td><td>0.966</td><td>0.287</td><td>25.425</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_sam3_propainter</td><td>0.922</td><td>1.000</td><td>0.659</td><td>25.808</td></tr>
+          <tr><td>cat-girl</td><td>yolo_sam2</td><td>0.767</td><td>1.000</td><td>0.597</td><td>28.249</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="content is-size-7 has-text-grey">
-      重新跑 evaluate / compare 后，请用各序列 <code>summary/combined.md</code> 更新上表；若指标列与脚本输出不一致，以 md 为准调整表头说明。
-    </p>
   </div>
 </section>
 
@@ -361,7 +557,6 @@
   <div class="content has-text-centered">
     <p>
       <a href="https://github.com/CosmosMount/dynamic-object-removal" target="_blank" rel="noopener">Repository</a>
-      · Deploy with GitHub Actions (<code>page/</code> as site root).
     </p>
   </div>
 </footer>

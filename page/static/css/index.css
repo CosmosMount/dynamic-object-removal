@@ -1,5 +1,121 @@
+/* ---- Fluid layout & typography (viewport-adaptive) ---- */
+:root {
+  --page-pad-x: clamp(0.65rem, 2.8vw, 1.85rem);
+  --page-pad-y: clamp(1.75rem, 4vw, 3.25rem);
+  --content-max: min(100% - 2 * var(--page-pad-x), 72rem);
+  --fs-body: clamp(0.94rem, 0.28vw + 0.86rem, 1.08rem);
+  --fs-lead: clamp(1rem, 0.45vw + 0.9rem, 1.2rem);
+  --fs-h1-hero: clamp(1.35rem, 2.2vw + 0.85rem, 2.35rem);
+  --fs-h2-section: clamp(1.28rem, 1.15vw + 1rem, 1.9rem);
+  --fs-h3-method: clamp(1.1rem, 0.75vw + 0.9rem, 1.45rem);
+  --fs-h4-exp: clamp(1rem, 0.5vw + 0.88rem, 1.22rem);
+  --fs-caption: clamp(0.7rem, 0.22vw + 0.64rem, 0.82rem);
+  --fs-table: clamp(0.68rem, 0.2vw + 0.62rem, 0.8rem);
+  /* Prose + MathJax: same nominal size (math scales with parent em) */
+  --fs-math-prose: var(--fs-body);
+  --hero-logo-h: clamp(4.25rem, 14vw + 1rem, 9.5rem);
+  --nav-logo-h: clamp(1.45rem, 2.5vw, 1.85rem);
+  --video-max-h: clamp(11rem, 38vmin, 26rem);
+}
+
+html {
+  /* Slight root scaling on large / small viewports */
+  font-size: clamp(15px, 0.25vw + 14.25px, 17.5px);
+}
+
 body {
   font-family: 'Noto Sans', sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+
+.project-page .section {
+  padding-top: var(--page-pad-y);
+  padding-bottom: var(--page-pad-y);
+  padding-left: var(--page-pad-x);
+  padding-right: var(--page-pad-x);
+}
+
+/* Widen content fluidly beyond Bulma’s fixed is-max-desktop cap */
+.project-page .container.is-max-desktop {
+  max-width: var(--content-max);
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.project-page .hero-body {
+  padding-top: clamp(1.25rem, 3vw, 2.5rem);
+  padding-bottom: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.project-page .content.has-text-justified,
+.project-page #method .has-text-justified {
+  font-size: var(--fs-body);
+}
+
+.project-page #abstract > .container > .title.is-3,
+.project-page #method > .container > .title.is-3,
+.project-page #experiments > .container > .title.is-3 {
+  font-size: var(--fs-h2-section);
+}
+
+.project-page #method .title.is-4 {
+  font-size: var(--fs-h3-method);
+}
+
+.project-page #experiments .title.is-4,
+.project-page #experiments .title.is-5 {
+  font-size: var(--fs-h4-exp);
+}
+
+.project-page #experiments > .container > p.content {
+  font-size: var(--fs-body);
+}
+
+/* Quantitative metric prose: same size as body; MathJax matches via em (see mjx rules below) */
+.project-page #experiments .quantitative-prose {
+  font-size: var(--fs-math-prose);
+  line-height: 1.58;
+}
+
+.project-page #experiments .quantitative-prose code {
+  font-size: 0.92em;
+}
+
+.project-page .project-hero-subtitle.subtitle {
+  font-size: var(--fs-lead);
+}
+
+.project-page .method-pipeline-caption {
+  font-size: var(--fs-caption);
+  color: #4a4a4a;
+}
+
+.project-page .content p,
+.project-page #method p {
+  line-height: 1.58;
+}
+
+.project-page #method .image img,
+.project-page #experiments figure.image img {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.project-page .table.is-size-7 {
+  font-size: var(--fs-table);
+}
+
+.project-page .navbar-item,
+.project-page .navbar-link {
+  font-size: clamp(0.88rem, 0.35vw + 0.8rem, 1rem);
+}
+
+.project-page .footer {
+  padding: clamp(1.5rem, 3vw, 2.5rem) var(--page-pad-x);
+  font-size: clamp(0.85rem, 0.3vw + 0.78rem, 0.95rem);
 }
 
 
@@ -154,4 +270,68 @@ body {
 }
 #interpolation-image-wrapper img {
   border-radius: 5px;
+}
+
+/* DynaClear branding */
+.navbar-brand .navbar-item img.project-nav-logo {
+  height: var(--nav-logo-h);
+  width: auto;
+  vertical-align: middle;
+  margin-right: clamp(0.3rem, 1vw, 0.55rem);
+}
+
+.project-hero-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: clamp(0.75rem, 2.5vw, 1.75rem);
+}
+
+.project-hero-heading .project-hero-logo-title {
+  height: var(--hero-logo-h);
+  width: auto;
+  flex-shrink: 0;
+}
+
+.project-hero-heading .project-hero-main-title {
+  flex: 1 1 min(100%, 12rem);
+  font-family: 'Google Sans', sans-serif;
+  font-weight: 600;
+  font-size: var(--fs-h1-hero);
+  line-height: 1.25;
+}
+
+/* Carousel videos: fluid max height, replaces former inline 360px */
+.project-page .project-video {
+  display: block;
+  width: 100%;
+  max-height: var(--video-max-h);
+  height: auto;
+}
+
+.project-page .results-carousel .item > p.is-size-7 {
+  font-size: var(--fs-caption);
+}
+
+/* MathJax CHTML: lock to surrounding text em so inline/display math matches prose */
+.project-page mjx-container[jax="CHTML"] {
+  font-size: 1em !important;
+}
+
+.project-page .math-display {
+  font-size: inherit;
+  line-height: 1.45;
+}
+
+.project-page #method .math-display {
+  font-size: var(--fs-body);
+}
+
+.project-page #experiments .quantitative-prose .math-display {
+  font-size: inherit;
+}
+
+.math-display {
+  overflow-x: auto;
+  text-align: center;
 }

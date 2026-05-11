@@ -18,13 +18,13 @@
 # CLI --only-stage 会覆盖此处。eval 不重跑推理，只读已有 inpaint 帧与 track mask。
 # only_stage: eval
 
-task: davis:scooter-board
+task: davis:cat-girl
 davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
-pipelines:
-  - vggt4d_sam3_diffueraser
-  # - vggt4d_sam3_propainter
-# run_all_pipelines: true
+# pipelines:
+#   - vggt4d_sam3_diffueraser
+#   # - vggt4d_sam3_propainter
+run_all_pipelines: true
 overwrite: true
 export_mask_vis: true
 

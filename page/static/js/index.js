@@ -6,9 +6,15 @@ $(document).ready(function () {
     $('.navbar-menu').toggleClass('is-active');
   });
 
+  var slidesToShow = 2;
+  if (typeof window.matchMedia === 'function') {
+    if (window.matchMedia('(max-width: 575px)').matches) slidesToShow = 1;
+    else if (window.matchMedia('(min-width: 1200px)').matches) slidesToShow = 3;
+  } else if (window.innerWidth < 576) slidesToShow = 1;
+
   var carouselOptions = {
     slidesToScroll: 1,
-    slidesToShow: 2,
+    slidesToShow: slidesToShow,
     loop: true,
     infinite: true,
     autoplay: false,

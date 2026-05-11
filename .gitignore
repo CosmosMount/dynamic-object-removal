@@ -1,5 +1,4 @@
 .vscode/
-videos/
 outputs/
 *__pycache__/
 inputs/
@@ -13,4 +12,4 @@ AGENTS.md
 PLAN.md
 TASK.md
 *.egg-info/
-# page/
+report/
