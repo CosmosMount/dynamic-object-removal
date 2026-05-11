@@ -10,7 +10,7 @@
 | 管线 | 源路径（`outputs/compare/<seq>/runs/<pid>/...`） |
 |------|--------------------------------------------------|
 | `vggt4d_sam3_diffueraser`、`vggt4d_diffueraser` | `inpaint/diffueraser/diffueraser_result.mp4` |
-| `vggt4d_trackanything`、`vggt4d_sam3_propainter`、`yolo_sam2` | `inpaint/propainter/<序列名>/inpaint_out.mp4` |
+| `vggt4d_xmem`、`vggt4d_sam3_propainter`、`yolo_sam2` | `inpaint/propainter/<序列名>/inpaint_out.mp4` |
 
 ## mask_vis
 

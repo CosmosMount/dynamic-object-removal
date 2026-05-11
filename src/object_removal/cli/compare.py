@@ -14,6 +14,7 @@ from object_removal.io.pipeline_argv import (
     inpaint_argv_from_diffueraser_opts,
     inpaint_argv_from_propainter_opts,
     mask_argv_from_vggt_opts,
+    xmem_argv_from_opts,
 )
 from object_removal.stages.inpaint_stage import run_inpaint_stage
 from object_removal.stages.mask_stage import run_mask_stage
@@ -38,7 +39,7 @@ def _fmt(v: Any) -> str:
 
 
 def _track_uses_init_masks_dir(track_method: str) -> bool:
-    """Track methods that read init masks from mask/init/masks (not e.g. trackanything's own init)."""
+    """Track methods that read init masks from mask/init/masks (not e.g. xmem's own init)."""
     return track_method in ("sam2", "sam3", "optflow", "identity")
 
 
@@ -356,6 +357,11 @@ def main() -> None:
                 base_s3.update(raw_s3)
             sam3_opts = base_s3
 
+        xmem_opts: Optional[Dict[str, Any]] = None
+        if track_method == "xmem":
+            raw_xmem = spec.get("xmem")
+            xmem_opts = dict(raw_xmem) if isinstance(raw_xmem, dict) else None
+
         mask_env = env_for(env_map, stage="mask", method=mask_method)
         track_env = env_for(env_map, stage="track", method=track_method)
         inpaint_env = env_for(env_map, stage="inpaint", method=inpaint_method)
@@ -424,6 +430,7 @@ def main() -> None:
                     method=track_method,
                     overwrite=overwrite,
                     sam3_options=sam3_opts if track_method == "sam3" else None,
+                    xmem_options=xmem_opts if track_method == "xmem" else None,
                     repo_root=repo_root,
                 )
             else:
@@ -535,6 +542,8 @@ def main() -> None:
                             "--sam3-score-thresh",
                             str(float(sam3_opts.get("score_thresh", 0.0))),
                         ]
+                    if track_method == "xmem" and xmem_opts:
+                        track_argv += xmem_argv_from_opts(xmem_opts)
                     _run_stage_via_conda_run(
                         conda_exe=conda_exe,
                         env_name=track_env,
@@ -550,6 +559,7 @@ def main() -> None:
                         method=track_method,
                         overwrite=overwrite,
                         sam3_options=sam3_opts if track_method == "sam3" else None,
+                        xmem_options=xmem_opts if track_method == "xmem" else None,
                         repo_root=repo_root,
                     )
                 track_masks_dir = layout.track_masks_binary_dir

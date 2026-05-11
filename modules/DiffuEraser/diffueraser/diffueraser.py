@@ -298,6 +298,14 @@ class DiffuEraser:
         ).to(self.device, torch.float16)
         self.pipeline.scheduler = UniPCMultistepScheduler.from_config(self.pipeline.scheduler.config)
         self.pipeline.set_progress_bar_config(disable=True)
+        try:
+            self.pipeline.enable_vae_slicing()
+        except Exception:
+            pass
+        try:
+            self.pipeline.enable_attention_slicing()
+        except Exception:
+            pass
 
         self.noise_scheduler = UniPCMultistepScheduler.from_config(self.pipeline.scheduler.config)
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)

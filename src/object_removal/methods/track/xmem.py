@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -18,24 +19,45 @@ class Params:
     max_area_ratio: float = 0.80
     sam_points_per_side: int = 32
     no_download: bool = False
+    # Optional strategy (mirrors SAM3-style two-stage anchor + bidirectional fusion in vendor script).
+    bidirectional: bool = False
+    bidirectional_merge: str = "union"  # union|intersection
+    two_stage_anchor_idx: str = "-1"  # "-1"|"auto"|non-negative int
+    two_stage_auto_samples: int = 7
+    two_stage_auto_max_fg_frac: float = 0.92
+    two_stage_auto_min_fg_frac: float = 0.00008
+    two_stage_auto_min_fg_pixels: int = 64
 
 
-def run(*, repo_root: Path, frames_dir: Path, out_binary_dir: Path, params: Params) -> dict:
-    """Track-Anything tracker producing binary masks.
+def params_with_overrides(base: Params, overrides: Optional[Dict[str, Any]]) -> Params:
+    if not overrides:
+        return base
+    names = {f.name for f in fields(Params)}
+    kw = {k: v for k, v in overrides.items() if k in names}
+    return replace(base, **kw)
 
-    Runs in the `trackanything` env. Uses vendored headless implementation.
-    """
+
+def run(
+    *,
+    repo_root: Path,
+    frames_dir: Path,
+    out_binary_dir: Path,
+    params: Params,
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """XMem tracker producing binary masks."""
     import sys
 
-    from object_removal.vendor import trackanything_masks as mod
+    from object_removal.vendor import xmem_masks as mod
 
-    track_dir = repo_root / "modules" / "Track-Anything"
+    params = params_with_overrides(params, options)
+    xmem_root = repo_root / "modules" / "xmem_tracker"
     out_raw = out_binary_dir.parent / "masks_indexed_raw"
     out_raw.mkdir(parents=True, exist_ok=True)
     out_binary_dir.mkdir(parents=True, exist_ok=True)
 
     argv = [
-        "trackanything_masks.py",
+        "xmem_masks.py",
         "--repo_root",
         str(repo_root),
         "--frame_dir",
@@ -44,8 +66,8 @@ def run(*, repo_root: Path, frames_dir: Path, out_binary_dir: Path, params: Para
         str(out_raw),
         "--binary_mask_dir",
         str(out_binary_dir),
-        "--trackanything_dir",
-        str(track_dir),
+        "--xmem_root",
+        str(xmem_root),
         "--device",
         params.device,
         "--sam_model_type",
@@ -70,7 +92,22 @@ def run(*, repo_root: Path, frames_dir: Path, out_binary_dir: Path, params: Para
     if params.init_mask is not None:
         argv += ["--init_mask", str(params.init_mask)]
     if params.yolo_model is not None:
-        argv += ["--yolo_model", params.yolo_model]
+        argv += ["--yolo_model", str(params.yolo_model)]
+    if params.bidirectional:
+        argv.append("--xmem-bidirectional")
+    argv += ["--xmem-bidirectional-merge", str(params.bidirectional_merge)]
+    argv += [
+        "--xmem-two-stage-anchor-idx",
+        str(params.two_stage_anchor_idx),
+        "--xmem-two-stage-auto-samples",
+        str(int(params.two_stage_auto_samples)),
+        "--xmem-two-stage-auto-max-fg-frac",
+        str(float(params.two_stage_auto_max_fg_frac)),
+        "--xmem-two-stage-auto-min-fg-frac",
+        str(float(params.two_stage_auto_min_fg_frac)),
+        "--xmem-two-stage-auto-min-fg-pixels",
+        str(int(params.two_stage_auto_min_fg_pixels)),
+    ]
 
     old_argv = sys.argv
     try:
@@ -85,7 +122,7 @@ def run(*, repo_root: Path, frames_dir: Path, out_binary_dir: Path, params: Para
 def main() -> None:
     import argparse
 
-    ap = argparse.ArgumentParser(description="Track-Anything tracker (binary masks)")
+    ap = argparse.ArgumentParser(description="XMem tracker (binary masks)")
     ap.add_argument("--repo_root", required=True)
     ap.add_argument("--frames_dir", required=True)
     ap.add_argument("--out_binary_dir", required=True)
@@ -95,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

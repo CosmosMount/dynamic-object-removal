@@ -33,7 +33,7 @@ By default, `compare` reads `configs/compare.yaml`. If `out_root` is omitted, it
 
 ```
 src/object_removal/        # main package: cli / stages / methods / io
-modules/                  # third-party: VGGT4D, SAM2, SAM3, ProPainter, DiffuEraser, Track-Anything…
+modules/                  # third-party: VGGT4D, SAM2, SAM3, ProPainter, DiffuEraser, xmem_tracker…
 configs/                  # compare.yaml + pipelines.yaml + env_map.json
 ckpts/                    # model weights (not tracked)
 data/DAVIS/               # DAVIS dataset (not tracked)
@@ -71,7 +71,7 @@ Place weights under these default paths (relative to repo root):
   - `diffuEraser/`
   - `propainter/`
   - `PCM_Weights/` (e.g. `PCM_Weights/sd15/pcm_sd15_smallcfg_2step_converted.safetensors`)
-- **Track-Anything**: follow its README and centralize checkpoints under `ckpts/trackanything/`.
+- **XMem**: place weights under `ckpts/xmem/` (default: `ckpts/xmem/XMem-s012.pth`; `sam_auto` init also uses `ckpts/xmem/sam_vit_*.pth`).
 
 ---
 
@@ -98,7 +98,7 @@ You typically edit:
 
 ### 4.2 `configs/pipelines.yaml` — pipelines + all tunable parameters
 
-Optional root key **`parameters`** holds shared option dicts per module (`vggt4d`, `sam3`, `diffueraser`, `propainter`). Each pipeline entry is merged shallowly: pipeline-specific blocks override the same keys from `parameters`. For apples-to-apples comparison, you can keep all tunables in `parameters` and reduce each pipeline to only `mask` / `track` / `inpaint`. The legacy key `defaults` is still read if present; `parameters` wins on conflicts.
+Optional root key **`parameters`** holds shared option dicts per module (`vggt4d`, `sam3`, `xmem`, `diffueraser`, `propainter`). Each pipeline entry is merged shallowly: pipeline-specific blocks override the same keys from `parameters`. For apples-to-apples comparison, you can keep all tunables in `parameters` and reduce each pipeline to only `mask` / `track` / `inpaint`. The legacy key `defaults` is still read if present; `parameters` wins on conflicts.
 
 Each pipeline contains required fields `mask` / `track` / `inpaint`. Optional per-pipeline override blocks are still supported, but they are not required when you keep everything in `parameters`:
 
@@ -208,15 +208,15 @@ pip install -r modules/DiffuEraser/requirements.txt
 
 Then prepare `ckpts/diffueraser/weights/` (Stable Diffusion, VAE, DiffuEraser, ProPainter, PCM_Weights).
 
-### 5.6 `trackanything` env (Track-Anything)
+### 5.6 `xmem` env (XMem)
 
-Based on `modules/Track-Anything/README.md` and `modules/Track-Anything/requirements.txt`:
+The batch path now uses only the vendored XMem runtime files under `modules/xmem_tracker/`. Install the minimal runtime dependencies in that env:
 
 ```bash
-conda activate trackanything
+conda activate xmem
 cd /path/to/dynamic-object-removal
 pip install -e .
-pip install -r modules/Track-Anything/requirements.txt
+pip install numpy pyyaml torch torchvision
 ```
 
 ---

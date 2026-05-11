@@ -29,7 +29,7 @@ python -m object_removal.cli.compare
 
 ```
 src/object_removal/        # 主包：cli / stages / methods / io
-modules/                  # 第三方：VGGT4D、SAM2、SAM3、ProPainter、DiffuEraser、Track-Anything…
+modules/                  # 第三方：VGGT4D、SAM2、SAM3、ProPainter、DiffuEraser、xmem_tracker…
 configs/                  # compare.yaml（一次运行） + pipelines.yaml（pipeline 定义） + env_map.json（方法→conda env）
 ckpts/                    # 模型权重（不入 git）
 data/DAVIS/               # DAVIS 数据（不入 git）
@@ -67,7 +67,7 @@ data/DAVIS/
   - `diffuEraser/`
   - `propainter/`
   - `PCM_Weights/`（例如 `PCM_Weights/sd15/pcm_sd15_smallcfg_2step_converted.safetensors`）
-- **Track-Anything**：权重按其 README 要求放置（并在 `ckpts/trackanything/` 下集中管理）
+- **XMem**：权重放到 `ckpts/xmem/`（默认 `ckpts/xmem/XMem-s012.pth`；若用 `sam_auto` 初始化，也会读取 `ckpts/xmem/sam_vit_*.pth`）
 
 ---
 
@@ -94,7 +94,7 @@ python -m object_removal.cli.compare --task davis:bmx-trees --pipelines ... --ou
 
 ### 4.2 `configs/pipelines.yaml`（pipeline 定义 + 需要传入的参数都写这里）
 
-根级可选字段 **`parameters`**：按模块统一写 `vggt4d` / `sam3` / `diffueraser` / `propainter` 四块公共参数；每个 pipeline 与同名字段浅合并（pipeline 里写的键覆盖 `parameters`）。如果你想做公平对比实验，可以把所有参数都收敛到 `parameters`，让每条 pipeline 只保留 `mask` / `track` / `inpaint` 三项。旧键名 **`defaults`** 仍兼容；若同时存在，同名键以 `parameters` 为准。
+根级可选字段 **`parameters`**：按模块统一写 `vggt4d` / `sam3` / `xmem` / `diffueraser` / `propainter` 五块公共参数；每个 pipeline 与同名字段浅合并（pipeline 里写的键覆盖 `parameters`）。如果你想做公平对比实验，可以把所有参数都收敛到 `parameters`，让每条 pipeline 只保留 `mask` / `track` / `inpaint` 三项。旧键名 **`defaults`** 仍兼容；若同时存在，同名键以 `parameters` 为准。
 
 每个 pipeline 最简可以只写成：
 
@@ -209,15 +209,15 @@ pip install -r modules/DiffuEraser/requirements.txt
 
 建议系统安装 `ffmpeg`，用于生成/重编码可播放的 MP4。
 
-### 5.6 `trackanything` 环境（Track-Anything）
+### 5.6 `xmem` 环境（XMem）
 
-依据 `modules/Track-Anything/README.md` / `requirements.txt`：
+当前批处理链路只使用 `modules/xmem_tracker/` 下这套 vendored XMem 运行文件；该环境安装最小运行依赖即可：
 
 ```bash
-conda activate trackanything
+conda activate xmem
 cd /path/to/dynamic-object-removal
 pip install -e .
-pip install -r modules/Track-Anything/requirements.txt
+pip install numpy pyyaml torch torchvision
 ```
 
 ---

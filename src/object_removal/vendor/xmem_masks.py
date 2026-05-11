@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 """
-Vendored from legacy: pipelines/trackanything_diffueraser/trackanything_masks.py
+Vendored XMem batch tracker with optional SAM3-style merge heuristics.
 
 Changes:
-- Default YOLO path prefers repo_root/ckpts/yolo/yolov8n-seg.pt (since legacy baseline/ will be deleted).
+- Default YOLO path prefers repo_root/ckpts/yolo/yolov8n-seg.pt.
+- Optional SAM3-style two-stage anchor merge + bidirectional fusion (`--xmem-*` flags).
+- Directly uses XMem `BaseTracker` without any interactive wrapper layer.
 """
 
 import argparse
 import os
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -33,7 +35,7 @@ XMEM_FILENAME = "XMem-s012.pth"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Headless Track-Anything mask export with automatic init mask.",
+        description="Headless XMem mask export with automatic init mask.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--repo_root", required=True, help="Repo root (to resolve default weights).")
@@ -41,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw_mask_dir", required=True, help="Output indexed mask PNG directory.")
     parser.add_argument("--binary_mask_dir", default=None, help="Optional output binary 0/255 PNG directory.")
     parser.add_argument("--vis_dir", default=None, help="Optional output painted tracking frames.")
-    parser.add_argument("--trackanything_dir", required=True, help="Path to modules/Track-Anything.")
+    parser.add_argument("--xmem_root", required=True, help="Directory that contains the vendored XMem runtime files.")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--sam_model_type", default="vit_h", choices=sorted(SAM_FILENAMES.keys()))
     parser.add_argument("--sam_checkpoint", default=None)
@@ -56,6 +58,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_area_ratio", type=float, default=0.80)
     parser.add_argument("--sam_points_per_side", type=int, default=32)
     parser.add_argument("--no_download", action="store_true")
+    parser.add_argument(
+        "--xmem-bidirectional",
+        action="store_true",
+        help="After the primary forward pass, run a reverse pass from the last-frame mask and fuse.",
+    )
+    parser.add_argument(
+        "--xmem-bidirectional-merge",
+        type=str,
+        default="union",
+        choices=["union", "intersection"],
+        help="How to fuse forward vs reverse binary masks.",
+    )
+    parser.add_argument(
+        "--xmem-two-stage-anchor-idx",
+        type=str,
+        default="-1",
+        help="Two-stage: '-1' off; int = fixed anchor frame index; 'auto' = pick anchor from stage1 masks.",
+    )
+    parser.add_argument("--xmem-two-stage-auto-samples", type=int, default=7)
+    parser.add_argument("--xmem-two-stage-auto-max-fg-frac", type=float, default=0.92)
+    parser.add_argument("--xmem-two-stage-auto-min-fg-frac", type=float, default=0.00008)
+    parser.add_argument("--xmem-two-stage-auto-min-fg-pixels", type=int, default=64)
     return parser.parse_args()
 
 
@@ -77,18 +101,20 @@ def maybe_download(url: str, path: str, no_download: bool) -> str:
     if no_download:
         raise FileNotFoundError(f"Checkpoint not found and --no_download is set: {path}")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    print(f"[trackanything] downloading {url} -> {path}")
+    print(f"[xmem] downloading {url} -> {path}")
     import urllib.request
 
     urllib.request.urlretrieve(url, path)
     return path
 
 
-def resolve_checkpoints(args: argparse.Namespace) -> Tuple[str, str]:
-    ckpt_dir = os.path.join(args.repo_root, "ckpts", "trackanything")
-    sam_checkpoint = args.sam_checkpoint or os.path.join(ckpt_dir, SAM_FILENAMES[args.sam_model_type])
+def resolve_checkpoints(args: argparse.Namespace) -> Tuple[Optional[str], str]:
+    ckpt_dir = os.path.join(args.repo_root, "ckpts", "xmem")
     xmem_checkpoint = args.xmem_checkpoint or os.path.join(ckpt_dir, XMEM_FILENAME)
-    sam_checkpoint = maybe_download(SAM_URLS[args.sam_model_type], sam_checkpoint, args.no_download)
+    sam_checkpoint: Optional[str] = None
+    if args.init_source == "sam_auto":
+        sam_checkpoint = args.sam_checkpoint or os.path.join(ckpt_dir, SAM_FILENAMES[args.sam_model_type])
+        sam_checkpoint = maybe_download(SAM_URLS[args.sam_model_type], sam_checkpoint, args.no_download)
     xmem_checkpoint = maybe_download(XMEM_URL, xmem_checkpoint, args.no_download)
     return sam_checkpoint, xmem_checkpoint
 
@@ -225,12 +251,120 @@ def write_masks(mask_dir: str, binary_dir: Optional[str], frame_paths: List[str]
             Image.fromarray(binary, mode="L").save(os.path.join(binary_dir, f"{stem}.png"))
 
 
+def _parse_two_stage_anchor(raw: str) -> Tuple[str, int]:
+    """Same semantics as SAM3: off|-1, auto, or non-negative int."""
+    s = str(raw).strip().lower()
+    if s in ("", "-1", "none", "off"):
+        return "off", -1
+    if s == "auto":
+        return "auto", -1
+    try:
+        v = int(s, 10)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid --xmem-two-stage-anchor-idx: {raw!r} (use -1, auto, or a non-negative int)"
+        ) from e
+    if v < 0:
+        return "off", -1
+    return "fixed", v
+
+
+def indexed_masks_to_outputs(masks: List[np.ndarray]) -> Dict[int, Dict[int, np.ndarray]]:
+    """SAM3-style frame_idx -> obj_id -> bool mask (for pick_auto_anchor)."""
+    outputs: Dict[int, Dict[int, np.ndarray]] = {}
+    for idx, im in enumerate(masks):
+        per: Dict[int, np.ndarray] = {}
+        for obj_id in np.unique(im):
+            oid = int(obj_id)
+            if oid <= 0:
+                continue
+            per[oid] = im == oid
+        outputs[idx] = per
+    return outputs
+
+
+def _pick_anchor_auto_xmem(
+    masks1: List[np.ndarray],
+    frame_stems: List[str],
+    h: int,
+    w: int,
+    num_samples: int,
+    max_fg_frac: float,
+    min_fg_frac: float,
+    min_fg_pixels: int,
+) -> Tuple[int, List[Tuple[int, int, float, bool, float]]]:
+    from object_removal.vendor.sam3_vos import pick_auto_anchor
+
+    outputs1 = indexed_masks_to_outputs(masks1)
+    return pick_auto_anchor(
+        outputs1,
+        frame_stems,
+        h,
+        w,
+        int(num_samples),
+        float(max_fg_frac),
+        float(min_fg_frac),
+        int(min_fg_pixels),
+    )
+
+
+def _merge_two_stage_indexed(
+    masks1: List[np.ndarray],
+    masks_bwd_local: List[np.ndarray],
+    anchor: int,
+) -> List[np.ndarray]:
+    """SAM3-style merge: idx<=anchor from re-track (backward chunk), idx>anchor from stage1."""
+    t = len(masks1)
+    merged = [masks1[i].copy() for i in range(t)]
+    for k in range(len(masks_bwd_local)):
+        g = anchor - k
+        if 0 <= g < t:
+            merged[g] = masks_bwd_local[k].copy()
+    for i in range(anchor + 1, t):
+        merged[i] = masks1[i].copy()
+    return merged
+
+
+def _stitch_painted_two_stage(
+    painted1: List[np.ndarray],
+    painted_bwd: List[np.ndarray],
+    anchor: int,
+    t: int,
+) -> List[np.ndarray]:
+    out: List[np.ndarray] = []
+    for g in range(t):
+        if g <= anchor:
+            k = anchor - g
+            out.append(painted_bwd[k].copy())
+        else:
+            out.append(painted1[g].copy())
+    return out
+
+
+def _fuse_bidirectional_indexed(
+    fwd: List[np.ndarray],
+    rev_mapped: List[np.ndarray],
+    merge: str,
+) -> List[np.ndarray]:
+    out: List[np.ndarray] = []
+    for i in range(len(fwd)):
+        a = fwd[i]
+        b = rev_mapped[i]
+        bp = a > 0
+        br = b > 0
+        if merge == "intersection":
+            out.append(np.where(bp & br, a, 0).astype(np.uint8))
+        else:
+            u = np.where(bp, a, 0)
+            u = np.where(~bp & br, b, u)
+            out.append(u.astype(np.uint8))
+    return out
+
+
 def main() -> None:
     args = parse_args()
     args.repo_root = os.path.abspath(args.repo_root)
-    args.trackanything_dir = os.path.abspath(args.trackanything_dir)
-    # Must resolve before os.chdir(Track-Anything): relative paths like data/DAVIS/...
-    # would otherwise be resolved against the wrong cwd and look "missing" (not deleted).
+    args.xmem_root = os.path.abspath(args.xmem_root)
     args.frame_dir = os.path.abspath(args.frame_dir)
     args.raw_mask_dir = os.path.abspath(args.raw_mask_dir)
     if args.binary_mask_dir:
@@ -249,6 +383,8 @@ def main() -> None:
     if args.init_source == "yolo":
         template_mask = build_yolo_init_mask(args, frame_paths[0])
     elif args.init_source == "sam_auto":
+        if not sam_checkpoint:
+            raise RuntimeError("SAM checkpoint was not resolved for --init_source sam_auto")
         template_mask = build_sam_auto_init_mask(args, first_rgb, sam_checkpoint)
     else:
         template_mask = load_init_mask(args, h, w)
@@ -258,33 +394,90 @@ def main() -> None:
     if int((template_mask > 0).sum()) == 0:
         raise RuntimeError("Automatic init mask is empty.")
 
+    ts_mode, ts_anchor_req = _parse_two_stage_anchor(str(args.xmem_two_stage_anchor_idx))
+    stems = [os.path.splitext(os.path.basename(p))[0] for p in frame_paths]
+
     old_cwd = os.getcwd()
-    sys.path.insert(0, args.trackanything_dir)
-    sys.path.insert(0, os.path.join(args.trackanything_dir, "tracker"))
-    sys.path.insert(0, os.path.join(args.trackanything_dir, "tracker", "model"))
-    os.chdir(args.trackanything_dir)
+    sys.path.insert(0, args.xmem_root)
+    os.chdir(args.xmem_root)
     try:
-        from track_anything import TrackingAnything
+        from base_tracker import BaseTracker
 
-        class TrackArgs:
-            device = args.device
-            sam_model_type = args.sam_model_type
-
-        model = TrackingAnything(sam_checkpoint, xmem_checkpoint, "", TrackArgs())
+        tracker = BaseTracker(xmem_checkpoint, device=args.device)
         images = [read_rgb(path) for path in frame_paths]
-        masks, _, painted_images = model.generator(images=images, template_mask=template_mask)
-        model.xmem.clear_memory()
+        t = len(images)
+
+        def run_generator(im_list: List[np.ndarray], tmpl: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+            masks: List[np.ndarray] = []
+            painted: List[np.ndarray] = []
+            for idx, image in enumerate(im_list):
+                first = tmpl if idx == 0 else None
+                mask, _logit, painted_image = tracker.track(image, first)
+                masks.append(mask)
+                painted.append(painted_image)
+            tracker.clear_memory()
+            return masks, painted
+
+        masks1, painted1 = run_generator(images, template_mask)
+
+        working_masks = [m.copy() for m in masks1]
+        working_painted = [p.copy() for p in painted1]
+
+        if ts_mode != "off":
+            if ts_mode == "auto":
+                anchor, cand_rows = _pick_anchor_auto_xmem(
+                    masks1,
+                    stems,
+                    h,
+                    w,
+                    int(args.xmem_two_stage_auto_samples),
+                    float(args.xmem_two_stage_auto_max_fg_frac),
+                    float(args.xmem_two_stage_auto_min_fg_frac),
+                    int(args.xmem_two_stage_auto_min_fg_pixels),
+                )
+                print(
+                    f"[xmem] two-stage auto anchor idx={anchor} "
+                    f"(candidates idx,pixels,frac,stripe,fill: "
+                    f"{[(i, int(a), round(f, 4), st, round(fl, 3)) for i, a, f, st, fl in cand_rows]})"
+                )
+            else:
+                anchor = min(max(0, ts_anchor_req), t - 1)
+                print(f"[xmem] two-stage fixed anchor idx={anchor} (requested={ts_anchor_req})")
+
+            if int((masks1[anchor] > 0).sum()) == 0:
+                print(f"[xmem] WARN: stage1 empty at anchor {anchor}; keeping stage1 only.")
+            else:
+                rev_prefix = list(reversed(images[: anchor + 1]))
+                tmpl_a = masks1[anchor].copy()
+                masks_bwd, painted_bwd = run_generator(rev_prefix, tmpl_a)
+                working_masks = _merge_two_stage_indexed(masks1, masks_bwd, anchor)
+                if args.vis_dir:
+                    working_painted = _stitch_painted_two_stage(painted1, painted_bwd, anchor, t)
+                print(
+                    f"[xmem] two-stage merge: idx<={anchor} from re-track "
+                    f"(prefix reversed), idx>{anchor} from stage1."
+                )
+
+        if args.xmem_bidirectional:
+            rev_full = list(reversed(images))
+            tmpl_last = working_masks[-1].copy()
+            masks_rev_loc, _painted_rev = run_generator(rev_full, tmpl_last)
+            masks_rev_global = [masks_rev_loc[t - 1 - j] for j in range(t)]
+            merge_mode = str(args.xmem_bidirectional_merge).strip().lower()
+            if merge_mode not in ("union", "intersection"):
+                raise ValueError(f"Invalid bidirectional merge: {args.xmem_bidirectional_merge!r}")
+            working_masks = _fuse_bidirectional_indexed(working_masks, masks_rev_global, merge_mode)
+            print(f"[xmem] bidirectional fuse ({merge_mode}) applied after primary pipeline.")
     finally:
         os.chdir(old_cwd)
 
-    write_masks(args.raw_mask_dir, args.binary_mask_dir, frame_paths, masks)
+    write_masks(args.raw_mask_dir, args.binary_mask_dir, frame_paths, working_masks)
     if args.vis_dir:
         os.makedirs(args.vis_dir, exist_ok=True)
-        for frame_path, image in zip(frame_paths, painted_images):
+        for frame_path, image in zip(frame_paths, working_painted):
             stem = os.path.splitext(os.path.basename(frame_path))[0]
             Image.fromarray(image.astype(np.uint8)).save(os.path.join(args.vis_dir, f"{stem}.jpg"))
 
 
 if __name__ == "__main__":
     main()
-

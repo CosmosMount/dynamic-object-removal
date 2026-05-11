@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Re-exporting loaders from the compare CLI module would create import cycles.
 
-_PIPELINE_OPTION_KEYS = ("vggt4d", "sam3", "diffueraser", "propainter")
+_PIPELINE_OPTION_KEYS = ("vggt4d", "sam3", "diffueraser", "propainter", "xmem")
 
 
 def _load_root_module_parameters(data: Dict[str, Any], *, path: Path) -> Dict[str, Dict[str, Any]]:
@@ -86,6 +86,10 @@ def load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
             merged["propainter"], dict
         ):
             raise ValueError(f"Pipeline {pid!r} field `propainter` must be a mapping or omitted in {path}")
+        if "xmem" in merged and merged["xmem"] is not None and not isinstance(
+            merged["xmem"], dict
+        ):
+            raise ValueError(f"Pipeline {pid!r} field `xmem` must be a mapping or omitted in {path}")
         for k in ("mask", "track", "inpaint"):
             if k not in merged or not isinstance(merged[k], str) or not merged[k].strip():
                 raise ValueError(f"Pipeline {pid!r} missing string field {k!r} in {path}")

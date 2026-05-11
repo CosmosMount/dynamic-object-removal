@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run_dir", required=True)
     p.add_argument("--frames_dir", required=True)
     p.add_argument("--in_masks_dir", required=True)
-    p.add_argument("--method", required=True, choices=["identity", "sam2", "sam3", "optflow", "trackanything"])
+    p.add_argument("--method", required=True, choices=["identity", "sam2", "sam3", "optflow", "xmem"])
     p.add_argument("--overwrite", action="store_true", default=False)
     p.add_argument("--repo_root", default=".", help="Repo root (required layout for sam3 / sam2 ckpt paths).")
     p.add_argument("--sam3-checkpoint", default="ckpts/sam3/sam3.pt", help="Used when --method sam3")
@@ -36,6 +36,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Used when --method sam3 (two-stage auto anchor)",
     )
     p.add_argument("--sam3-score-thresh", type=float, default=0.0, help="Used when --method sam3")
+    p.add_argument(
+        "--xmem-bidirectional",
+        action="store_true",
+        help="Used when --method xmem: extra reverse pass from last mask, fused with primary.",
+    )
+    p.add_argument(
+        "--xmem-bidirectional-merge",
+        type=str,
+        default="union",
+        choices=["union", "intersection"],
+        help="Used when --method xmem",
+    )
+    p.add_argument(
+        "--xmem-two-stage-anchor-idx",
+        type=str,
+        default="-1",
+        help="Used when --method xmem: -1 off, auto, or frame index (re-track prefix from anchor).",
+    )
+    p.add_argument("--xmem-two-stage-auto-samples", type=int, default=7, help="Used when --method xmem")
+    p.add_argument(
+        "--xmem-two-stage-auto-max-fg-frac",
+        type=float,
+        default=0.92,
+        help="Used when --method xmem (two-stage auto anchor)",
+    )
+    p.add_argument(
+        "--xmem-two-stage-auto-min-fg-frac",
+        type=float,
+        default=0.00008,
+        help="Used when --method xmem (two-stage auto anchor)",
+    )
+    p.add_argument(
+        "--xmem-two-stage-auto-min-fg-pixels",
+        type=int,
+        default=64,
+        help="Used when --method xmem (two-stage auto anchor)",
+    )
     return p
 
 
@@ -52,6 +89,17 @@ def main() -> None:
             "two_stage_auto_min_fg_pixels": args.sam3_two_stage_auto_min_fg_pixels,
             "score_thresh": args.sam3_score_thresh,
         }
+    xmem_options = None
+    if args.method == "xmem":
+        xmem_options = {
+            "bidirectional": bool(args.xmem_bidirectional),
+            "bidirectional_merge": str(args.xmem_bidirectional_merge),
+            "two_stage_anchor_idx": str(args.xmem_two_stage_anchor_idx),
+            "two_stage_auto_samples": int(args.xmem_two_stage_auto_samples),
+            "two_stage_auto_max_fg_frac": float(args.xmem_two_stage_auto_max_fg_frac),
+            "two_stage_auto_min_fg_frac": float(args.xmem_two_stage_auto_min_fg_frac),
+            "two_stage_auto_min_fg_pixels": int(args.xmem_two_stage_auto_min_fg_pixels),
+        }
     out_dir = run_track_stage(
         run_dir=Path(args.run_dir),
         frames_dir=Path(args.frames_dir),
@@ -59,6 +107,7 @@ def main() -> None:
         method=args.method,
         overwrite=bool(args.overwrite),
         sam3_options=sam3_options,
+        xmem_options=xmem_options,
         repo_root=Path(args.repo_root).resolve(),
     )
     print(f"track_masks_dir={out_dir}")

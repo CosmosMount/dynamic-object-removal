@@ -31,6 +31,15 @@
 #   two_stage_auto_min_fg_pixels: int
 #   score_thresh: float
 #
+# Track options (`xmem:`) for `track: xmem` (SAM3-style heuristics on top of XMem forward passes):
+#   bidirectional: bool              # Extra full-sequence reverse pass from the last-frame mask; fused with primary.
+#   bidirectional_merge: union|intersection
+#   two_stage_anchor_idx: -1|auto|int   # `-1` off; `auto` picks anchor from stage1 masks; int = fixed anchor index.
+#   two_stage_auto_samples: int
+#   two_stage_auto_max_fg_frac: float
+#   two_stage_auto_min_fg_frac: float
+#   two_stage_auto_min_fg_pixels: int
+#
 # Inpaint options (`diffueraser:`) for `inpaint: diffueraser`:
 #   video_length: int               # If omitted, compare uses `ceil(num_frames / 24)`.
 #   mask_dilation_iter: int         # Dilate the hole before inpaint; larger values can swallow nearby background.
@@ -38,7 +47,7 @@
 #   ref_stride: int                 # Reference-frame stride used by the ProPainter prior inside DiffuEraser.
 #   neighbor_length: int            # Neighbor-frame count used by the ProPainter prior.
 #   subvideo_length: int            # Optical-flow subclip length; lower values can reduce long-range artifacts.
-#   max_img_size: int               # Downscale long edges before inpaint; may trade detail for stability.
+#   max_img_size: int               # Long-edge cap before DiffuEraser (default 768). Lower (e.g. 640) if CUDA OOM.
 #
 # Inpaint options (`propainter:`) for `inpaint: propainter`:
 #   resize_ratio: float             # Resize ratio before ProPainter inference.
@@ -49,7 +58,8 @@
 #   save_frames: bool
 #
 # Root-level `parameters:` (optional) — unified settings per integration module.
-# - Keys must be a subset of `vggt4d`, `sam3`, `diffueraser`, `propainter` (same names as optional blocks under each pipeline).
+# - Keys must be a subset of `vggt4d`, `sam3`, `diffueraser`, `propainter`, `xmem`
+#   (same names as optional blocks under each pipeline).
 # - Merge is shallow: each pipeline’s own block overrides the same keys from `parameters`.
 # - Under `pipelines:`, each entry can be reduced to `mask` / `track` / `inpaint` only.
 # - `parameters.propainter` applies to every pipeline whose `inpaint` method is `propainter` unless overridden.
@@ -57,7 +67,7 @@
 
 parameters:
   vggt4d:
-    dyn_threshold_scale: 0.7
+    dyn_threshold_scale: 0.3
     max_frames_for_vggt: 20
     threshold: 0
     merge_all: true
@@ -78,7 +88,7 @@ parameters:
   diffueraser:
     # Omit `video_length` to keep the default `ceil(num_frames / 24)` behavior.
     mask_dilation_iter: 6
-    max_img_size: 960
+    max_img_size: 768
     ref_stride: 10
     neighbor_length: 10
     subvideo_length: 50
@@ -108,16 +118,31 @@ pipelines:
     track: optflow
     inpaint: propainter
 
-  yolo_trackanything:
+  yolo_xmem:
     mask: yolo_first
-    track: trackanything
+    track: xmem
     inpaint: diffueraser
 
   # VGGT-based variants.
-  vggt4d_trackanything:
+  vggt4d_xmem:
     mask: vggt4d
-    track: trackanything
+    track: xmem
     inpaint: propainter
+    # Optional: bidirectional + two-stage anchor (see header `xmem:` docs).
+    xmem:
+      bidirectional: true
+      bidirectional_merge: union
+      two_stage_anchor_idx: auto
+
+  vggt4d_xmem_diffueraser:
+    mask: vggt4d
+    track: xmem
+    inpaint: diffueraser
+    # Optional: bidirectional + two-stage anchor (see header `xmem:` docs).
+    xmem:
+      bidirectional: true
+      bidirectional_merge: union
+      two_stage_anchor_idx: auto
 
   vggt4d:
     mask: vggt_framewise

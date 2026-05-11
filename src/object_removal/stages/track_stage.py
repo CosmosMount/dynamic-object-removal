@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
 from object_removal.methods.track import identity
-from object_removal.methods.track import optflow, sam2, sam3, trackanything
+from object_removal.methods.track import optflow, sam2, sam3, xmem
 
 
 def run_track_stage(
@@ -18,6 +18,7 @@ def run_track_stage(
     method: str,
     overwrite: bool = False,
     sam3_options: Optional[Dict[str, Any]] = None,
+    xmem_options: Optional[Dict[str, Any]] = None,
     repo_root: Optional[Path] = None,
 ) -> Path:
     """@brief Run the track stage and normalize outputs into binary mask PNGs.
@@ -28,6 +29,7 @@ def run_track_stage(
     @param method Track method id from the pipeline registry.
     @param overwrite Whether existing tracked masks should be cleared before rerunning.
     @param sam3_options Optional YAML-derived overrides for the SAM3 tracker.
+    @param xmem_options Optional YAML-derived overrides for the XMem tracker.
     @param repo_root Optional repository root used to resolve checkpoints and modules.
     @return The canonical binary-mask directory under `run_dir/track`.
     @raises FileNotFoundError If a required init mask is missing.
@@ -48,6 +50,10 @@ def run_track_stage(
             p = layout.track_dir / rel
             if p.is_dir():
                 shutil.rmtree(p, ignore_errors=True)
+    if overwrite and method == "xmem":
+        raw_xmem = layout.track_dir / "masks_indexed_raw"
+        if raw_xmem.is_dir():
+            shutil.rmtree(raw_xmem, ignore_errors=True)
     existing = list(out_dir.glob("*.png"))
     if existing and not overwrite:
         return out_dir
@@ -142,12 +148,13 @@ def run_track_stage(
         write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
         return out_dir
 
-    if method == "trackanything":
-        meta = trackanything.run(
+    if method == "xmem":
+        meta = xmem.run(
             repo_root=root,
             frames_dir=frames_dir,
             out_binary_dir=out_dir,
-            params=trackanything.Params(),
+            params=xmem.Params(),
+            options=xmem_options,
         )
         write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
         return out_dir

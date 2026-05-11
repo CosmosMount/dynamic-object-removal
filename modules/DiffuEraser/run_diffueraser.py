@@ -1,7 +1,9 @@
-import torch
-import os 
+import gc
+import os
 import time
 import argparse
+
+import torch
 from diffueraser.diffueraser import DiffuEraser
 from propainter.inference import Propainter, get_device
 
@@ -42,6 +44,12 @@ def main():
     propainter.forward(args.input_video, args.input_mask, priori_path, video_length=args.video_length, 
                         ref_stride=args.ref_stride, neighbor_length=args.neighbor_length, subvideo_length = args.subvideo_length,
                         mask_dilation = args.mask_dilation_iter) 
+
+    # ProPainter can leave a large VRAM footprint; free it before the diffusion UNet forward.
+    del propainter
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     ## diffueraser
     guidance_scale = None    # The default value is 0.  

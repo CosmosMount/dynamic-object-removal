@@ -89,7 +89,8 @@ def run_inpaint_stage(
         _de_def = {
             "mask_dilation_iter": 0,
             "mask_hole_shrink_iters": 2,
-            "max_img_size": 960,
+            # DiffuEraser loads the full clip into latents; 960 on long DAVIS clips often OOM on 8–12GB cards.
+            "max_img_size": 768,
             "ref_stride": 8,
             "neighbor_length": 12,
             "subvideo_length": 50,

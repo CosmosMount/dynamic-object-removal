@@ -62,6 +62,33 @@ def inpaint_argv_from_diffueraser_opts(opts: Optional[Dict[str, Any]]) -> List[s
     return out
 
 
+def xmem_argv_from_opts(opts: Optional[Dict[str, Any]]) -> List[str]:
+    """Map ``xmem:`` YAML block to ``object_removal.cli.track`` flags."""
+    if not opts:
+        return []
+    out: List[str] = []
+
+    def _b(key: str) -> bool:
+        return bool(opts.get(key))
+
+    if _b("bidirectional"):
+        out.append("--xmem-bidirectional")
+    merge = opts.get("bidirectional_merge")
+    if merge is not None and str(merge).strip():
+        out += ["--xmem-bidirectional-merge", str(merge).strip()]
+    if opts.get("two_stage_anchor_idx") is not None:
+        out += ["--xmem-two-stage-anchor-idx", str(opts["two_stage_anchor_idx"])]
+    if opts.get("two_stage_auto_samples") is not None:
+        out += ["--xmem-two-stage-auto-samples", str(int(opts["two_stage_auto_samples"]))]
+    if opts.get("two_stage_auto_max_fg_frac") is not None:
+        out += ["--xmem-two-stage-auto-max-fg-frac", str(float(opts["two_stage_auto_max_fg_frac"]))]
+    if opts.get("two_stage_auto_min_fg_frac") is not None:
+        out += ["--xmem-two-stage-auto-min-fg-frac", str(float(opts["two_stage_auto_min_fg_frac"]))]
+    if opts.get("two_stage_auto_min_fg_pixels") is not None:
+        out += ["--xmem-two-stage-auto-min-fg-pixels", str(int(opts["two_stage_auto_min_fg_pixels"]))]
+    return out
+
+
 def inpaint_argv_from_propainter_opts(opts: Optional[Dict[str, Any]]) -> List[str]:
     if not opts:
         return []
