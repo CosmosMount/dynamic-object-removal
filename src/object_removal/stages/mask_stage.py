@@ -20,6 +20,18 @@ def run_mask_stage(
     vggt4d_options: Optional[Dict[str, Any]] = None,
     repo_root: Optional[Path] = None,
 ) -> Path:
+    """@brief Run the mask stage and write canonical init-mask PNGs into `run_dir`.
+
+    @param run_dir Canonical per-pipeline run directory.
+    @param frames_dir Input RGB frame directory.
+    @param method Mask method id from the pipeline registry.
+    @param overwrite Whether existing mask outputs should be cleared before rerunning.
+    @param max_frames Optional frame cap forwarded to lightweight mask methods.
+    @param vggt4d_options Optional YAML-derived overrides for `vggt4d`-family methods.
+    @param repo_root Optional repository root used to resolve checkpoints and modules.
+    @return The canonical init-mask directory under `run_dir`.
+    @raises ValueError If `method` is unknown.
+    """
     layout = RunLayout(run_dir)
     ensure_layout_dirs(layout)
 

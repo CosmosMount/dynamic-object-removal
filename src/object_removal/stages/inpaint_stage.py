@@ -24,6 +24,18 @@ def run_inpaint_stage(
     diffueraser_options: Optional[Dict[str, Any]] = None,
     propainter_options: Optional[Dict[str, Any]] = None,
 ) -> Path:
+    """@brief Run the inpaint stage and normalize outputs into canonical frame PNGs.
+
+    @param run_dir Canonical per-pipeline run directory.
+    @param frames_dir Input RGB frame directory.
+    @param masks_dir Binary mask directory consumed by the inpaint method.
+    @param method Inpaint method id from the pipeline registry.
+    @param overwrite Whether existing inpaint frames should be cleared before rerunning.
+    @param diffueraser_options Optional YAML-derived overrides for DiffuEraser.
+    @param propainter_options Optional YAML-derived overrides for ProPainter.
+    @return The canonical inpaint-frame directory under `run_dir/inpaint`.
+    @raises ValueError If `method` is unknown.
+    """
     layout = RunLayout(run_dir)
     ensure_layout_dirs(layout)
 

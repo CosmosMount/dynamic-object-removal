@@ -10,6 +10,12 @@ import numpy as np
 
 @dataclass(frozen=True)
 class EvalInputs:
+    """@brief Inputs required to compute evaluation summaries for one pipeline run.
+
+    Paths are optional because compare may evaluate from either per-frame masks,
+    a DAVIS CSV summary, generated inpaint frames, or a subset of those artifacts.
+    """
+
     output_dir: Path
     part_label: str = ""
     experiment_name: str = ""
@@ -21,8 +27,7 @@ class EvalInputs:
     gt_video: Path | None = None
     pred_frames_dir: Path | None = None
     gt_frames_dir: Path | None = None
-    """Original RGB frames (e.g. DAVIS JPEGImages). Used for bg L1 and temporal metrics."""
-    source_frames_dir: Path | None = None
+    source_frames_dir: Path | None = None  # Original RGB frames used by bg-L1 and temporal metrics.
     video_metric_impl: str = "internal"  # retained for API compat; GT PSNR/SSIM no longer used
 
 
@@ -51,7 +56,11 @@ def _mask_score_from_components(
     fm: Optional[float],
     fr: Optional[float],
 ) -> Optional[float]:
-    """有逐帧 mask+GT 时：JM、FM、FR 各占 1/3；仅 Davis 汇总 CSV（无边界指标）时为 (JM+JR)/2。"""
+    """Blend mask metrics into one summary score.
+
+    When per-frame masks are available, the score is the mean of JM, FM, and FR.
+    When only a DAVIS CSV summary is available, the fallback score is `(JM + JR) / 2`.
+    """
     if jm is None:
         return None
     if fm is not None and fr is not None:
@@ -134,7 +143,7 @@ def _boundary_f_pr(
 def compute_mask_metrics_bundle(
     pred_dir: Path, gt_dir: Path, merge_gt_objects: bool = True
 ) -> Dict[str, Any]:
-    """JM/JR (IoU-based), recall/precision/Dice, FM/FR (boundary)；mask_score = mean(JM,FM,FR)。"""
+    """Compute the full mask metric bundle from predicted and ground-truth mask folders."""
     import cv2
 
     pred_files = _list_image_files(pred_dir)
@@ -287,7 +296,12 @@ def _warp_flow_bgr(prev_bgr: np.ndarray, flow: np.ndarray) -> np.ndarray:
 def compute_temporal_warping_and_flow_consistency(
     pred_dir: Path, source_dir: Path, mask_dir: Path, merge_mask: bool = True
 ) -> Tuple[Optional[float], Optional[float], Optional[float], int, str]:
-    """Farneback flow on source gray；mask 外与 mask 内（inpaint 洞）的 warp L1 均值 + mask 外光流抖动。"""
+    """Compute temporal warp error and flow consistency from consecutive frames.
+
+    Optical flow is estimated on grayscale source frames. The function reports mean
+    warp L1 on background pixels, mean warp L1 inside the inpaint hole, and the
+    frame-to-frame flow difference on background pixels.
+    """
     import cv2
 
     pairs = _align_pairs(pred_dir, source_dir, mask_dir)
@@ -307,7 +321,7 @@ def compute_temporal_warping_and_flow_consistency(
         prev_pred = _load_bgr(pp_prev)
         curr_pred = _load_bgr(pp_curr)
         m_curr = _load_mask(mp_curr, merge_objects=merge_mask)
-        # 统一到当前帧 source 分辨率（光流与 warp 与 curr 对齐；inpaint 帧间分辨率可能不一致）
+        # Normalize everything to the current source-frame resolution before flow and warping.
         h, w = int(curr_src.shape[0]), int(curr_src.shape[1])
         if prev_src.shape[:2] != (h, w):
             prev_src = cv2.resize(prev_src, (w, h), interpolation=cv2.INTER_LINEAR)
@@ -346,14 +360,14 @@ def compute_temporal_warping_and_flow_consistency(
 
 
 def compute_laplacian_var_mean(frames_dir: Path) -> Tuple[Optional[float], int, str]:
-    """每帧灰度 Laplacian 的方差，再对帧平均（仅 OpenCV+numpy，与计划中的轻量 NR 一致）。"""
+    """Compute the mean grayscale Laplacian variance across all frames."""
     import cv2
 
     files = _list_image_files(frames_dir)
     if not files:
         return None, 0, "no_frames"
     vals: List[float] = []
-    # ddepth：OpenCV Python 为 CV_64F / CV_32F，无 CV64F 别名
+    # OpenCV Python exposes `CV_64F` / `CV_32F`; there is no `CV64F` alias.
     lap_depth = getattr(cv2, "CV_64F", None) or getattr(cv2, "CV_32F", 5)
     for p in files:
         gray = cv2.cvtColor(_load_bgr(p), cv2.COLOR_BGR2GRAY)
@@ -363,7 +377,7 @@ def compute_laplacian_var_mean(frames_dir: Path) -> Tuple[Optional[float], int, 
 
 
 def compute_brisque_mean_optional(frames_dir: Path) -> Tuple[Optional[float], int]:
-    """OpenCV contrib quality 可用时返回 BRISQUE 帧均值。"""
+    """Return the mean BRISQUE score when OpenCV contrib quality is available."""
     files = _list_image_files(frames_dir)
     if not files:
         return None, 0
@@ -466,6 +480,12 @@ def write_zero_eval_summary(
 
 
 def run_eval(inputs: EvalInputs, *, propainter_root: Path | None = None) -> dict:
+    """@brief Evaluate one pipeline run and write a metrics summary to disk.
+
+    @param inputs Resolved evaluation inputs and optional artifact paths.
+    @param propainter_root Deprecated compatibility parameter retained for old call sites.
+    @return A summary dictionary identical to the JSON/CSV payload written to `inputs.output_dir`.
+    """
     _ = propainter_root  # GT video metrics removed; kept for call-site compatibility
 
     mask_source = "none"

@@ -1,4 +1,4 @@
-"""Resolve compare.yaml + pipelines.yaml into paths and registry (shared by compare CLI)."""
+"""Resolve compare config files into an execution context for the compare CLI."""
 
 from __future__ import annotations
 
@@ -8,7 +8,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Re-export loaders from compare module would create cycles; duplicate minimal pieces.
+# Re-exporting loaders from the compare CLI module would create import cycles.
+
+_PIPELINE_OPTION_KEYS = ("vggt4d", "sam3", "diffueraser", "propainter")
+
+
+def _load_root_module_parameters(data: Dict[str, Any], *, path: Path) -> Dict[str, Dict[str, Any]]:
+    """Merge root `parameters` and legacy `defaults` (parameters wins per key)."""
+    combined: Dict[str, Dict[str, Any]] = {}
+    for section in ("defaults", "parameters"):
+        raw = data.get(section)
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            raise ValueError(f"Invalid pipelines YAML (`{section}` must be a mapping): {path}")
+        for dk, dv in raw.items():
+            if dk not in _PIPELINE_OPTION_KEYS:
+                raise ValueError(
+                    f"Invalid pipelines YAML: unknown key {dk!r} under `{section}` in {path}. "
+                    f"Allowed: {list(_PIPELINE_OPTION_KEYS)}"
+                )
+            if dv is not None and not isinstance(dv, dict):
+                raise ValueError(f"Invalid pipelines YAML: `{section}.{dk}` must be a mapping in {path}")
+            if not isinstance(dv, dict):
+                continue
+            prev = combined.get(str(dk), {})
+            combined[str(dk)] = {**prev, **dict(dv)}
+    return combined
+
+
+def _merge_pipeline_module_parameters(global_params: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Shallow-merge global module parameters into one pipeline ``spec`` (pipeline overrides)."""
+    out = dict(spec)
+    for key in _PIPELINE_OPTION_KEYS:
+        base = global_params.get(key)
+        over = spec.get(key)
+        base_d = base if isinstance(base, dict) else {}
+        over_d = over if isinstance(over, dict) else {}
+        if base_d or over_d:
+            out[key] = {**base_d, **over_d}
+        elif key in out and not over_d and not base_d:
+            del out[key]
+    return out
 
 
 def load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -24,6 +65,7 @@ def load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Invalid pipelines YAML (expected mapping at root): {path}")
+    global_params = _load_root_module_parameters(data, path=path)
     pls = data.get("pipelines")
     if not isinstance(pls, dict) or not pls:
         raise ValueError(f"Invalid pipelines YAML (missing non-empty `pipelines:`): {path}")
@@ -31,18 +73,23 @@ def load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
     for pid, spec in pls.items():
         if not isinstance(spec, dict):
             raise ValueError(f"Invalid pipeline spec for {pid!r} in {path}")
-        if "sam3" in spec and spec["sam3"] is not None and not isinstance(spec["sam3"], dict):
+        merged = _merge_pipeline_module_parameters(global_params, spec) if global_params else dict(spec)
+        if "sam3" in merged and merged["sam3"] is not None and not isinstance(merged["sam3"], dict):
             raise ValueError(f"Pipeline {pid!r} field `sam3` must be a mapping or omitted in {path}")
-        if "vggt4d" in spec and spec["vggt4d"] is not None and not isinstance(spec["vggt4d"], dict):
+        if "vggt4d" in merged and merged["vggt4d"] is not None and not isinstance(merged["vggt4d"], dict):
             raise ValueError(f"Pipeline {pid!r} field `vggt4d` must be a mapping or omitted in {path}")
-        if "diffueraser" in spec and spec["diffueraser"] is not None and not isinstance(spec["diffueraser"], dict):
+        if "diffueraser" in merged and merged["diffueraser"] is not None and not isinstance(
+            merged["diffueraser"], dict
+        ):
             raise ValueError(f"Pipeline {pid!r} field `diffueraser` must be a mapping or omitted in {path}")
-        if "propainter" in spec and spec["propainter"] is not None and not isinstance(spec["propainter"], dict):
+        if "propainter" in merged and merged["propainter"] is not None and not isinstance(
+            merged["propainter"], dict
+        ):
             raise ValueError(f"Pipeline {pid!r} field `propainter` must be a mapping or omitted in {path}")
         for k in ("mask", "track", "inpaint"):
-            if k not in spec or not isinstance(spec[k], str) or not spec[k].strip():
+            if k not in merged or not isinstance(merged[k], str) or not merged[k].strip():
                 raise ValueError(f"Pipeline {pid!r} missing string field {k!r} in {path}")
-        out[str(pid)] = dict(spec)
+        out[str(pid)] = merged
     return out
 
 
@@ -110,6 +157,13 @@ def resolve_davis_paths(davis_root: Path, seq: str) -> Tuple[Path, Path]:
 
 @dataclass(frozen=True)
 class CompareRunContext:
+    """@brief Immutable compare-run context after YAML and CLI resolution.
+
+    This object centralizes resolved paths, selected pipeline ids, output roots,
+    and runtime knobs so the compare CLI can validate once and execute stages
+    without repeatedly re-reading configuration files.
+    """
+
     repo_root: Path
     compare_cfg_path: Path
     env_map_path: Path
@@ -155,7 +209,27 @@ def resolve_compare_context(
     export_mask_vis_cli: bool,
     only_stage_cli: Optional[str],
 ) -> CompareRunContext:
-    """Merge YAML + CLI overrides into a single context (compare main body)."""
+    """@brief Merge compare YAML values and CLI overrides into one immutable context.
+
+    @param repo_root Repository root used to resolve relative paths.
+    @param compare_cfg_path YAML file that stores task-level compare settings.
+    @param task Optional CLI override for the task spec.
+    @param davis_root Optional CLI override for the DAVIS root.
+    @param pipelines_config Optional CLI override for the pipeline registry YAML.
+    @param pipelines_arg Optional CLI override for selected pipeline ids.
+    @param run_all_pipelines Whether the CLI requested all registered pipelines.
+    @param out_root Optional CLI override for the output root.
+    @param part_label Optional CLI override for the summary label.
+    @param overwrite_cli Whether the CLI requested overwrite mode.
+    @param conda_exe Optional CLI override for the conda executable.
+    @param env_map_path Optional CLI override for the env-map JSON.
+    @param env_policy Optional CLI override for env selection behavior.
+    @param export_mask_vis_cli Whether the CLI requested mask overlay export.
+    @param only_stage_cli Optional CLI override for single-stage execution.
+    @return A fully resolved `CompareRunContext`.
+    @raises ValueError If required config is missing or inconsistent.
+    @raises FileNotFoundError If referenced DAVIS paths do not exist.
+    """
     cfg = load_compare_yaml(compare_cfg_path)
 
     def _cfg_str(key: str, default: str = "") -> str:
@@ -240,7 +314,7 @@ def resolve_compare_context(
                 f"(config: {pipelines_config_path})"
             )
 
-    # eval 只读各 run_dir 已有产物，可与 run_all_pipelines / 多条 pipelines 组合，逐条跑 eval。
+    # Eval reads existing run artifacts only, so it may iterate over multiple pipelines.
     if only_stage is not None and only_stage != "eval" and len(pipeline_ids) != 1:
         raise ValueError(
             f"When only_stage={only_stage!r} is set, exactly one pipeline id is required "
@@ -296,6 +370,13 @@ def resolve_compare_context(
 
 
 def env_for(env_map: Dict[str, Dict[str, str]], *, stage: str, method: str) -> str:
+    """@brief Resolve the conda environment name for one stage/method pair.
+
+    @param env_map Parsed method-to-environment mapping.
+    @param stage Stage name such as `mask`, `track`, `inpaint`, or `eval`.
+    @param method Method id to resolve.
+    @return The configured environment name, or an empty string for the current environment.
+    """
     stage_map = env_map.get(stage, {})
     if stage == "eval":
         return str(stage_map.get(method, stage_map.get("default", "")) or "")

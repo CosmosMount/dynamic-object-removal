@@ -3,16 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from object_removal.cli._argparse import parse_bool_arg
 from object_removal.stages.inpaint_stage import run_inpaint_stage
-
-
-def _opt_bool(s: str) -> bool:
-    v = str(s).strip().lower()
-    if v in ("1", "true", "t", "yes", "y"):
-        return True
-    if v in ("0", "false", "f", "no", "n"):
-        return False
-    raise argparse.ArgumentTypeError(f"expected true/false, got {s!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,8 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--propainter-subvideo-length", type=int, default=None)
     p.add_argument("--propainter-neighbor-length", type=int, default=None)
     p.add_argument("--propainter-raft-iter", type=int, default=None)
-    p.add_argument("--propainter-fp16", type=_opt_bool, default=None)
-    p.add_argument("--propainter-save-frames", type=_opt_bool, default=None)
+    p.add_argument("--propainter-fp16", type=parse_bool_arg, default=None)
+    p.add_argument("--propainter-save-frames", type=parse_bool_arg, default=None)
     return p
 
 

@@ -1,23 +1,29 @@
-# 管线定义：`pipelines:` 及每条下的 vggt4d / sam3 / diffueraser / propainter 等。
-# 一次 compare 的 task、pipelines 列表、out_root、overwrite 等写在 configs/compare.yaml。
+# Pipeline registry for `compare`.
+# Task-level selection (`task`, `pipelines`, `out_root`, `overwrite`, ...) lives in `configs/compare.yaml`.
 #
-# --- 可选块（与 object-removal 脚本参数对齐）---
+# Each entry under `pipelines:` must define:
+# - `mask`: mask-stage method id
+# - `track`: track-stage method id
+# - `inpaint`: inpaint-stage method id
 #
-# vggt4d: 当 mask 为 vggt4d 或 vggt_framewise 时生效（传给 demo_vggt4d / init mask 逻辑）
-#   dyn_threshold_scale: float   # 同 object-removal --dyn_threshold_scale，默认 0.7
-#   threshold: int                # 动态 mask 二值化 arr>threshold
-#   merge_all: bool
-#   split_cc: bool
-#   cc_min_area: int
-#   cc_max_objects: int
-#   cc_close_kernel: int
-#   max_frames_for_vggt: int       # vggt4d: 前 N 帧；vggt_framewise: 子采样上限
-#   vggt_chunk_size: int           # vggt4d: 与 object-removal VGGT_CHUNK_SIZE 分块跑 demo_vggt4d；默认 20；0=整段一批
-#   init_frame: int                # 仅 vggt4d：全序列帧号
-#   tail_policy: hold_last|zeros   # 仅 vggt_framewise
+# Optional stage-specific blocks under each pipeline are forwarded to the corresponding stage only.
+# Shared module settings live under root `parameters:` (see below).
 #
-# sam3: 当 track: sam3
-#   checkpoint: str                # 默认 ckpts/sam3/sam3.pt
+# Mask options (`vggt4d:`) for `mask: vggt4d` or `mask: vggt_framewise`:
+#   dyn_threshold_scale: float      # Same meaning as object-removal `--dyn_threshold_scale`; smaller values keep more motion.
+#   threshold: int                  # Binarize the dynamic mask with `arr > threshold`.
+#   merge_all: bool                 # Merge all connected dynamic regions into one init mask.
+#   split_cc: bool                  # Split the foreground into connected components / instance ids.
+#   cc_min_area: int                # Drop tiny connected components below this area.
+#   cc_max_objects: int             # Keep at most this many connected components.
+#   cc_close_kernel: int            # Morphological closing kernel size; `0` disables it.
+#   max_frames_for_vggt: int        # `vggt4d`: first N frames; `vggt_framewise`: uniform subsample cap.
+#   vggt_chunk_size: int            # `vggt4d` chunk size for demo_vggt4d; `0` runs the whole clip in one chunk.
+#   init_frame: int                 # `vggt4d` only: absolute frame index used for the init mask.
+#   tail_policy: hold_last|zeros    # `vggt_framewise` only: how to fill frames without a sampled VGGT slot.
+#
+# Track options (`sam3:`) for `track: sam3`:
+#   checkpoint: str                 # SAM3 checkpoint path; defaults to `ckpts/sam3/sam3.pt`.
 #   two_stage_anchor_idx: auto|-1|int
 #   two_stage_auto_samples: int
 #   two_stage_auto_max_fg_frac: float
@@ -25,23 +31,73 @@
 #   two_stage_auto_min_fg_pixels: int
 #   score_thresh: float
 #
-# diffueraser: 当 inpaint: diffueraser（其余权重路径仍用 repo/ckpts/diffueraser/weights/）
-#   video_length 省略时按 object-removal：ceil(帧数/24)；可写死如 video_length: 10
-#   mask_dilation_iter: DiffuEraser read_mask 里膨胀次数；洞扩太大易把背景人吃进修复区→拉丝；默认 0，需略扩洞可 2–4
-#   mask_hole_shrink_iters: 送入 Diffu 前对二值 mask 做 3×3 腐蚀次数，收紧洞沿（默认 2）；显式写 0 可关闭
-#   ref_stride / neighbor_length: ProPainter priori 参考帧；略减 ref_stride、略增 neighbor 有时更稳背景
-#   subvideo_length: 光流子段长度；过长偶发拖影可略减
-#   max_img_size: 降分辨率有时减轻幻觉，代价是细节
+# Inpaint options (`diffueraser:`) for `inpaint: diffueraser`:
+#   video_length: int               # If omitted, compare uses `ceil(num_frames / 24)`.
+#   mask_dilation_iter: int         # Dilate the hole before inpaint; larger values can swallow nearby background.
+#   mask_hole_shrink_iters: int     # Erode the binary hole before packaging the mask video; set `0` to disable.
+#   ref_stride: int                 # Reference-frame stride used by the ProPainter prior inside DiffuEraser.
+#   neighbor_length: int            # Neighbor-frame count used by the ProPainter prior.
+#   subvideo_length: int            # Optical-flow subclip length; lower values can reduce long-range artifacts.
+#   max_img_size: int               # Downscale long edges before inpaint; may trade detail for stability.
 #
-# propainter: 当 inpaint: propainter
-#   resize_ratio, subvideo_length, neighbor_length, raft_iter, fp16, save_frames
+# Inpaint options (`propainter:`) for `inpaint: propainter`:
+#   resize_ratio: float             # Resize ratio before ProPainter inference.
+#   subvideo_length: int
+#   neighbor_length: int
+#   raft_iter: int
+#   fp16: bool
+#   save_frames: bool
+#
+# Root-level `parameters:` (optional) — unified settings per integration module.
+# - Keys must be a subset of `vggt4d`, `sam3`, `diffueraser`, `propainter` (same names as optional blocks under each pipeline).
+# - Merge is shallow: each pipeline’s own block overrides the same keys from `parameters`.
+# - Under `pipelines:`, each entry can be reduced to `mask` / `track` / `inpaint` only.
+# - `parameters.propainter` applies to every pipeline whose `inpaint` method is `propainter` unless overridden.
+# - Legacy root key `defaults:` is still accepted for backward compatibility; `parameters` wins on duplicate keys.
+
+parameters:
+  vggt4d:
+    dyn_threshold_scale: 0.7
+    max_frames_for_vggt: 20
+    threshold: 0
+    merge_all: true
+    split_cc: true
+    cc_min_area: 32
+    cc_max_objects: 64
+    cc_close_kernel: 0
+    vggt_chunk_size: 20
+    tail_policy: hold_last
+  sam3:
+    checkpoint: ckpts/sam3/sam3.pt
+    two_stage_anchor_idx: auto
+    two_stage_auto_samples: 7
+    two_stage_auto_max_fg_frac: 0.92
+    two_stage_auto_min_fg_frac: 0.00008
+    two_stage_auto_min_fg_pixels: 64
+    score_thresh: 0.0
+  diffueraser:
+    # Omit `video_length` to keep the default `ceil(num_frames / 24)` behavior.
+    mask_dilation_iter: 6
+    max_img_size: 960
+    ref_stride: 10
+    neighbor_length: 10
+    subvideo_length: 50
+  propainter:
+    resize_ratio: 0.75
+    subvideo_length: 40
+    neighbor_length: 8
+    raft_iter: 12
+    fp16: true
+    save_frames: true
 
 pipelines:
+  # Lightweight baseline: motion mask -> identity track -> handcrafted fill.
   baseline:
     mask: baseline_yolo_motion
     track: identity
     inpaint: baseline_handcrafted
 
+  # YOLO init mask variants.
   yolo_sam2:
     mask: yolo_first
     track: sam2
@@ -52,112 +108,33 @@ pipelines:
     track: optflow
     inpaint: propainter
 
-  yolo_sam2:
-    mask: yolo_first
-    track: sam2
-    inpaint: propainter
-
   yolo_trackanything:
     mask: yolo_first
     track: trackanything
     inpaint: diffueraser
 
+  # VGGT-based variants.
   vggt4d_trackanything:
     mask: vggt4d
     track: trackanything
     inpaint: propainter
-    vggt4d:
-      dyn_threshold_scale: 0.2
-      max_frames_for_vggt: 20
-      vggt_chunk_size: 20
 
   vggt4d:
     mask: vggt_framewise
     track: identity
     inpaint: propainter
-    vggt4d:
-      dyn_threshold_scale: 0.2
-      max_frames_for_vggt: 20
-      tail_policy: hold_last
-    propainter:
-      resize_ratio: 0.75
-      subvideo_length: 40
-      neighbor_length: 8
-      raft_iter: 12
-      fp16: true
-      save_frames: true
 
   vggt4d_diffueraser:
     mask: vggt_framewise
     track: identity
     inpaint: diffueraser
-    vggt4d:
-      dyn_threshold_scale: 0.2
-      max_frames_for_vggt: 20
-      tail_policy: hold_last
-    diffueraser:
-      # video_length 省略时与 object-removal 脚本一致：ceil(帧数/24)；需固定秒数可写 video_length: 10
-      mask_dilation_iter: 4
-      max_img_size: 960
-      ref_stride: 8
-      neighbor_length: 12
-      subvideo_length: 50
 
   vggt4d_sam3_propainter:
     mask: vggt4d
     track: sam3
     inpaint: propainter
-    vggt4d:
-      dyn_threshold_scale: 0.2
-      threshold: 0
-      merge_all: true
-      split_cc: true
-      cc_min_area: 32
-      cc_max_objects: 64
-      cc_close_kernel: 0
-      max_frames_for_vggt: 20
-      vggt_chunk_size: 20
-    sam3:
-      checkpoint: ckpts/sam3/sam3.pt
-      two_stage_anchor_idx: auto
-      two_stage_auto_samples: 7
-      two_stage_auto_max_fg_frac: 0.92
-      two_stage_auto_min_fg_frac: 0.00008
-      two_stage_auto_min_fg_pixels: 64
-      score_thresh: 0.0
-    propainter:
-      resize_ratio: 0.75
-      subvideo_length: 40
-      neighbor_length: 8
-      raft_iter: 12
-      fp16: true
-      save_frames: true
 
   vggt4d_sam3_diffueraser:
     mask: vggt4d
     track: sam3
     inpaint: diffueraser
-    vggt4d:
-      dyn_threshold_scale: 0.2
-      threshold: 0
-      merge_all: true
-      split_cc: true
-      cc_min_area: 32
-      cc_max_objects: 64
-      cc_close_kernel: 0
-      max_frames_for_vggt: 20
-      vggt_chunk_size: 20
-    sam3:
-      checkpoint: ckpts/sam3/sam3.pt
-      two_stage_anchor_idx: auto
-      two_stage_auto_samples: 7
-      two_stage_auto_max_fg_frac: 0.92
-      two_stage_auto_min_fg_frac: 0.00008
-      two_stage_auto_min_fg_pixels: 64
-      score_thresh: 0.0
-    diffueraser:
-      mask_dilation_iter: 6
-      max_img_size: 960
-      ref_stride: 10
-      neighbor_length: 10
-      subvideo_length: 50

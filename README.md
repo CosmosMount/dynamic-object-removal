@@ -8,16 +8,17 @@ This repository implements a modular video object removal pipeline split into fo
 - **Vendored third-party methods**: `modules/`
 - **Run configuration**: `configs/compare.yaml` (one run) and `configs/pipelines.yaml` (pipelines + params)
 
-Chinese version: **`README_zh.md`**
+[Chinese version](README_zh.md)
 
 ---
 
 ## 0. Quick start (recommended)
 
 1. Prepare DAVIS under `data/DAVIS` (Section 2).
-2. Create the required conda envs and install dependencies (Section 5).
-3. Edit `configs/compare.yaml` (task / pipelines / overwrite / out_root).
-4. From repo root:
+2. Prepare model checkpoints under `ckpts`, you can download from [Drive](https://drive.google.com/drive/folders/1iLGFL-ASrsymbmVhEBDXMnfaSD6uNd_M?usp=sharing)
+3. Create the required conda envs and install dependencies (Section 5).
+4. Edit `configs/compare.yaml` (task / pipelines / overwrite / out_root).
+5. From repo root:
 
 ```bash
 python -m object_removal.cli.compare
@@ -87,19 +88,25 @@ python -m object_removal.cli.compare --task davis:bmx-trees --pipelines ... --ou
 You typically edit:
 
 - **`task`**
-- **`pipelines`** (pipeline ids defined in `configs/pipelines.yaml`)
+- **`pipelines`** (pipeline ids defined in `configs/pipelines.yaml`; use this when you want a fixed subset)
+- **`run_all_pipelines`** (mutually exclusive with `pipelines`; equivalent to `--all`)
+- **`only_stage`** (optional `mask` / `track` / `inpaint` / `eval`; `eval` may iterate over multiple pipelines, the others require exactly one)
 - **`overwrite`** (recommend `true` while iterating)
 - **`out_root`** (optional; omit to use the default `outputs/compare/<SEQ>`)
+- **`export_mask_vis`** plus optional **`mask_vis_fps`** / **`mask_vis_alpha`** (write a track overlay preview MP4)
+- **`env_policy`** (`auto`, `force_multi`, or `force_single`, matching the compare CLI)
 
 ### 4.2 `configs/pipelines.yaml` — pipelines + all tunable parameters
 
-Each pipeline contains required fields `mask` / `track` / `inpaint`, plus optional blocks (all defined in YAML, not CLI):
+Optional root key **`parameters`** holds shared option dicts per module (`vggt4d`, `sam3`, `diffueraser`, `propainter`). Each pipeline entry is merged shallowly: pipeline-specific blocks override the same keys from `parameters`. For apples-to-apples comparison, you can keep all tunables in `parameters` and reduce each pipeline to only `mask` / `track` / `inpaint`. The legacy key `defaults` is still read if present; `parameters` wins on conflicts.
+
+Each pipeline contains required fields `mask` / `track` / `inpaint`. Optional per-pipeline override blocks are still supported, but they are not required when you keep everything in `parameters`:
 
 - `vggt4d:` (includes `dyn_threshold_scale`, etc.)
 - `sam3:`
 - `diffueraser:` / `propainter:`
 
-The YAML documents supported keys at the top.
+The YAML documents supported keys at the top and groups them by stage. In practice you usually keep pipeline ids stable and only tune the nested option blocks.
 
 ### 4.3 `configs/env_map.json` — method → conda env
 
@@ -108,6 +115,17 @@ With default `env_policy: auto`, `compare` runs stages via:
 `conda run -n <env> python -m object_removal.cli.<stage> ...`
 
 Mapping lives in `configs/env_map.json`. Empty string `""` means: run that stage in the **current** Python environment running `compare`.
+
+Minimal example:
+
+```json
+{
+  "mask": { "vggt4d": "vggt" },
+  "track": { "sam3": "sam3", "identity": "" },
+  "inpaint": { "diffueraser": "diffueraser" },
+  "eval": { "default": "" }
+}
+```
 
 ---
 
@@ -238,7 +256,4 @@ python -m object_removal.cli.eval    --run_dir runs/demo --pred_mask_dir runs/de
 
 ---
 
-## 7. Project conventions
-
-Repo-specific rules: `AGENTS.md`. Design notes: `PLAN.md`.
 

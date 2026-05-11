@@ -20,6 +20,19 @@ def run_track_stage(
     sam3_options: Optional[Dict[str, Any]] = None,
     repo_root: Optional[Path] = None,
 ) -> Path:
+    """@brief Run the track stage and normalize outputs into binary mask PNGs.
+
+    @param run_dir Canonical per-pipeline run directory.
+    @param frames_dir Input RGB frame directory.
+    @param in_masks_dir Init-mask directory produced by the mask stage.
+    @param method Track method id from the pipeline registry.
+    @param overwrite Whether existing tracked masks should be cleared before rerunning.
+    @param sam3_options Optional YAML-derived overrides for the SAM3 tracker.
+    @param repo_root Optional repository root used to resolve checkpoints and modules.
+    @return The canonical binary-mask directory under `run_dir/track`.
+    @raises FileNotFoundError If a required init mask is missing.
+    @raises ValueError If `method` is unknown.
+    """
     layout = RunLayout(run_dir)
     root = (repo_root or Path.cwd()).resolve()
     ensure_layout_dirs(layout)

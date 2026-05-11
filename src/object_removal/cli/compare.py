@@ -149,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=(
             "Default: read run settings from configs/compare.yaml (task, pipelines, out_root, …).\n"
-            "Omit out_root in YAML to use outputs/compare/<DAVIS序列名> from task davis:SEQ.\n"
+            "Omit out_root in YAML to use outputs/compare/<SEQ> from task davis:SEQ.\n"
             "CLI options override YAML when provided.\n"
             "Examples:\n"
             "  %(prog)s\n"

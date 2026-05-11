@@ -1,36 +1,46 @@
-# 默认 compare 运行配置：`python -m object_removal.cli.compare`（可用 CLI 覆盖单项）
+# Default config for `python -m object_removal.cli.compare`.
+# Any CLI flag may override the matching YAML field.
 #
-# task: 必填，如 davis:bmx-trees
-# davis_root: DAVIS 根目录（相对仓库根）
-# pipelines_config: 管线定义文件（内含 pipelines: 与各 pipeline 的 vggt4d/sam3/…）
-# pipelines: 要跑的 pipeline id 列表；与 run_all_pipelines 二选一
-# run_all_pipelines: true 时等价于原 --all
-# out_root: 输出根目录；省略时默认为 outputs/compare/<序列名>（从 task 的 davis:SEQ 取 SEQ）
-# overwrite: 是否覆盖已有阶段输出
-# part_label, conda_exe, env_map, env_policy: 与原先 CLI 一致
-# export_mask_vis: true 时 track 后写出 runs/<pipeline>/track/mask_vis.mp4（参考 object-removal postprocess_sam3）
-# mask_vis_fps: 10
-# mask_vis_alpha: 0.5
-# 或命令行: python -m object_removal.cli.compare --export-mask-vis
-#
-# only_stage: 可选 mask | track | inpaint | eval；只跑该阶段。
-# mask/track/inpaint 须恰好一条 pipeline；eval 可与 run_all_pipelines 合用，对所有 pipeline 逐个 eval。
-# CLI --only-stage 会覆盖此处。eval 不重跑推理，只读已有 inpaint 帧与 track mask。
-# only_stage: eval
+# Task input:
+# - `task` is required. Current runner supports `davis:SEQ`.
+# - `davis_root` is resolved relative to the repository root when not absolute.
+# - Omit `out_root` to use the default `outputs/compare/<SEQ>`.
 
-task: davis:cat-girl
+task: davis:scooter-board
 davis_root: data/DAVIS
+# out_root: outputs/compare/cat-girl
+
+# Pipeline selection:
+# - `pipelines_config` points to the registry file that defines `pipelines:`.
+# - Use exactly one of `pipelines` or `run_all_pipelines`.
+# - Uncomment `only_stage` to run one stage only.
+# - For `only_stage: mask|track|inpaint`, exactly one pipeline id is required.
+# - For `only_stage: eval`, multiple pipeline ids are allowed and only existing artifacts are read.
+
 pipelines_config: configs/pipelines.yaml
 # pipelines:
 #   - vggt4d_sam3_diffueraser
 #   # - vggt4d_sam3_propainter
 run_all_pipelines: true
+# only_stage: eval
+
+# Output behavior:
+# - `overwrite: true` clears existing outputs for the selected stage before rerunning it.
+# - `export_mask_vis: true` writes `runs/<pipeline>/track/mask_vis.mp4` after track.
+# - `mask_vis_fps` and `mask_vis_alpha` are optional overlay settings used only when mask video export is enabled.
+
 overwrite: true
 export_mask_vis: true
+# mask_vis_fps: 10
+# mask_vis_alpha: 0.5
+
+# Runtime environment:
+# - `part_label` is forwarded to downstream summaries.
+# - `conda_exe` selects the conda executable used by compare.
+# - `env_map` points to the method-to-conda-env mapping JSON.
+# - `env_policy` is one of `auto`, `force_multi`, or `force_single`.
 
 part_label: ""
 conda_exe: conda
 env_map: configs/env_map.json
 env_policy: auto
-
-# only_stage: eval

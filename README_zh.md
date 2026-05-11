@@ -11,9 +11,10 @@
 ## 0. 快速开始（建议先跑通）
 
 1. 准备 DAVIS 数据到 `data/DAVIS`（见下文）。
-2. 按需创建 conda 环境并安装依赖（见下文「每个环境安装什么」）。
-3. 编辑 `configs/compare.yaml`（一次运行的 task / pipelines / overwrite / out_root 等）。
-4. 在仓库根目录执行：
+2. 准备模型权重到 `ckpts`，可以从[Drive](https://drive.google.com/drive/folders/1iLGFL-ASrsymbmVhEBDXMnfaSD6uNd_M?usp=sharing)下载
+3. 按需创建 conda 环境并安装依赖（见下文「每个环境安装什么」）。
+4. 编辑 `configs/compare.yaml`（一次运行的 task / pipelines / overwrite / out_root 等）。
+5. 在仓库根目录执行：
 
 ```bash
 python -m object_removal.cli.compare
@@ -83,34 +84,29 @@ python -m object_removal.cli.compare --task davis:bmx-trees --pipelines ... --ou
 你主要会改：
 
 - **`task`**：如 `davis:bmx-trees`
-- **`pipelines`**：要跑哪些 pipeline id（这些 id 在 `configs/pipelines.yaml` 里定义）
+- **`pipelines`**：要跑哪些 pipeline id（这些 id 在 `configs/pipelines.yaml` 里定义；适合只跑固定子集）
+- **`run_all_pipelines`**：与 `pipelines` 二选一；等价于 `--all`
+- **`only_stage`**：可选 `mask` / `track` / `inpaint` / `eval`；其中 `eval` 可遍历多个 pipeline，其余阶段必须只选一个 pipeline
 - **`overwrite`**：是否覆盖（建议调参阶段用 true）
 - **`out_root`**：可省略；省略则默认 `outputs/compare/<SEQ>`
+- **`export_mask_vis`** 以及可选的 **`mask_vis_fps`** / **`mask_vis_alpha`**：导出 track 结果的叠加预览 MP4
+- **`env_policy`**：`auto`、`force_multi`、`force_single`，与 compare CLI 含义一致
 
 ### 4.2 `configs/pipelines.yaml`（pipeline 定义 + 需要传入的参数都写这里）
 
-每个 pipeline 形如：
+根级可选字段 **`parameters`**：按模块统一写 `vggt4d` / `sam3` / `diffueraser` / `propainter` 四块公共参数；每个 pipeline 与同名字段浅合并（pipeline 里写的键覆盖 `parameters`）。如果你想做公平对比实验，可以把所有参数都收敛到 `parameters`，让每条 pipeline 只保留 `mask` / `track` / `inpaint` 三项。旧键名 **`defaults`** 仍兼容；若同时存在，同名键以 `parameters` 为准。
+
+每个 pipeline 最简可以只写成：
 
 ```yaml
 pipelines:
-  vggt_sam3_diffueraser:
+  vggt4d_sam3_diffueraser:
     mask: vggt4d
     track: sam3
     inpaint: diffueraser
-    vggt4d:
-      dyn_threshold_scale: 0.7
-      max_frames_for_vggt: 20
-      # ...
-    sam3:
-      checkpoint: ckpts/sam3/sam3.pt
-      two_stage_anchor_idx: auto
-      # ...
-    diffueraser:
-      video_length: 10
-      # ...
 ```
 
-其中 `vggt4d:` / `sam3:` / `diffueraser:` / `propainter:` 的可写字段已经在该 YAML 顶部注释里列出，并会被 `compare` 解析并传入各 stage。
+其中 `vggt4d:` / `sam3:` / `diffueraser:` / `propainter:` 的可写字段已经在该 YAML 顶部注释里按 stage 分组列出，并会被 `compare` 解析后传入各 stage。
 
 ### 4.3 `configs/env_map.json`（方法 → conda env）
 
@@ -118,6 +114,17 @@ pipelines:
 `conda run -n <env> python -m object_removal.cli.<stage> ...`
 
 映射表在 `configs/env_map.json`。值为空字符串 `""` 表示该 stage 在当前运行 `compare` 的环境中执行（你需要自己保证依赖）。
+
+最小示例：
+
+```json
+{
+  "mask": { "vggt4d": "vggt" },
+  "track": { "sam3": "sam3", "identity": "" },
+  "inpaint": { "diffueraser": "diffueraser" },
+  "eval": { "default": "" }
+}
+```
 
 ---
 
@@ -250,7 +257,4 @@ python -m object_removal.cli.eval   --run_dir runs/demo --pred_mask_dir runs/dem
 
 ---
 
-## 7. 维护与规范
-
-仓库内的修改原则与协作约定见 `AGENTS.md`；总体设计与实现笔记见 `PLAN.md`。
 

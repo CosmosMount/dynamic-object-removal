@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
+from object_removal.utils.video import resolve_ffmpeg
 
 
 def _list_frame_files(frames_dir: Path) -> List[Path]:
@@ -80,8 +81,11 @@ def export_mask_overlay_video(
         for i, frame in enumerate(video_frames):
             cv2.imwrite(str(tmp / f"{i:05d}.jpg"), frame)
 
+        ffmpeg = resolve_ffmpeg()
+        if ffmpeg is None:
+            ffmpeg = "ffmpeg"
         cmd = [
-            "ffmpeg",
+            ffmpeg,
             "-y",
             "-hide_banner",
             "-loglevel",

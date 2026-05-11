@@ -3,16 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from object_removal.cli._argparse import parse_bool_arg
 from object_removal.stages.mask_stage import run_mask_stage
-
-
-def _vggt_bool(s: str) -> bool:
-    v = str(s).strip().lower()
-    if v in ("1", "true", "t", "yes", "y"):
-        return True
-    if v in ("0", "false", "f", "no", "n"):
-        return False
-    raise argparse.ArgumentTypeError(f"expected true/false, got {s!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,13 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--vggt4d-merge-all",
-        type=_vggt_bool,
+        type=parse_bool_arg,
         default=None,
         help="vggt4d init: merge_all mode (true/false).",
     )
     p.add_argument(
         "--vggt4d-split-cc",
-        type=_vggt_bool,
+        type=parse_bool_arg,
         default=None,
         help="Split foreground into instance ids by CC (true/false).",
     )
