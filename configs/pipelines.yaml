@@ -64,7 +64,7 @@
 
 parameters:
   vggt4d:
-    dyn_threshold_scale: 0.3
+    dyn_threshold_scale: 0.7
     max_frames_for_vggt: 20
     threshold: 0
     merge_all: true
@@ -96,6 +96,11 @@ parameters:
     raft_iter: 12
     fp16: true
     save_frames: true
+  xmem:
+    bidirectional: true
+    bidirectional_merge: union
+    two_stage_anchor_idx: auto
+    two_stage_min_overlap_ratio: 0.6
 
 pipelines:
   # Lightweight baseline: motion mask -> identity track -> handcrafted fill.
@@ -125,10 +130,6 @@ pipelines:
     mask: vggt4d
     track: xmem
     inpaint: propainter
-    xmem:
-      bidirectional: true
-      bidirectional_merge: union
-      two_stage_anchor_idx: auto
 
   vggt4d:
     mask: vggt_framewise
@@ -146,6 +147,7 @@ pipelines:
     inpaint: propainter
 
   vggt4d_sam3_diffueraser:
+    share_mask_track_from: vggt4d_sam3
     mask: vggt4d
     track: sam3
     inpaint: diffueraser

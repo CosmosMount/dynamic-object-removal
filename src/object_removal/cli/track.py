@@ -87,6 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=64,
         help="Used when --method xmem (deprecated).",
     )
+    p.add_argument(
+        "--xmem-two-stage-min-overlap-ratio",
+        type=float,
+        default=0.25,
+        help="Per-object min overlap ratio for two-stage anchor seed validation.",
+    )
     return p
 
 
@@ -113,6 +119,7 @@ def main() -> None:
             "two_stage_auto_max_fg_frac": float(args.xmem_two_stage_auto_max_fg_frac),
             "two_stage_auto_min_fg_frac": float(args.xmem_two_stage_auto_min_fg_frac),
             "two_stage_auto_min_fg_pixels": int(args.xmem_two_stage_auto_min_fg_pixels),
+            "two_stage_min_overlap_ratio": float(args.xmem_two_stage_min_overlap_ratio),
         }
     out_dir = run_track_stage(
         run_dir=Path(args.run_dir),

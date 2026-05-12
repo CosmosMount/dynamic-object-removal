@@ -86,6 +86,8 @@ def xmem_argv_from_opts(opts: Optional[Dict[str, Any]]) -> List[str]:
         out += ["--xmem-two-stage-auto-min-fg-frac", str(float(opts["two_stage_auto_min_fg_frac"]))]
     if opts.get("two_stage_auto_min_fg_pixels") is not None:
         out += ["--xmem-two-stage-auto-min-fg-pixels", str(int(opts["two_stage_auto_min_fg_pixels"]))]
+    if opts.get("two_stage_min_overlap_ratio") is not None:
+        out += ["--xmem-two-stage-min-overlap-ratio", str(float(opts["two_stage_min_overlap_ratio"]))]
     return out
 
 

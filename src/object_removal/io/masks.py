@@ -110,7 +110,7 @@ def init_masks_sufficient_for_track(frames_dir: Path, init_masks_dir: Path, trac
     tm = (track_method or "").strip().lower()
     if tm in ("sam2", "optflow"):
         return init_mask_nonempty_on_first_frame(frames_dir, init_masks_dir)
-    if tm in ("sam3", "identity"):
+    if tm in ("sam3", "identity", "xmem"):
         return init_masks_dir_has_any_foreground_png(init_masks_dir)
     return init_mask_nonempty_on_first_frame(frames_dir, init_masks_dir)
 

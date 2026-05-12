@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 """
-Vendored XMem batch tracker with optional overlap-anchor bidirectional refinement.
+Vendored XMem batch tracker with optional two-stage merge and bidirectional fusion.
 
-Changes:
-- Default YOLO path prefers repo_root/ckpts/yolo/yolov8n-seg.pt.
-- Optional overlap-anchor path (`--xmem-*`): full forward, mirrored full reverse from
-  last-frame mask, pick max-overlap keyframe, intersect seed, bidirectional re-track from anchor.
-- Directly uses XMem `BaseTracker` without any interactive wrapper layer.
+The init mask is always provided from the mask pipeline stage via --init_mask.
+Two-stage (`--xmem-two-stage-anchor-idx`): full forward, mirrored full reverse,
+pick max-overlap keyframe, re-track prefix from forward-mask seed.
+Bidirectional (`--xmem-bidirectional`): full reverse pass from last-frame mask,
+then union/intersection fusion with forward result.
 """
 
 import argparse
@@ -20,23 +20,13 @@ import numpy as np
 from PIL import Image
 
 
-SAM_URLS = {
-    "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-    "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-    "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-}
-SAM_FILENAMES = {
-    "vit_h": "sam_vit_h_4b8939.pth",
-    "vit_l": "sam_vit_l_0b3195.pth",
-    "vit_b": "sam_vit_b_01ec64.pth",
-}
 XMEM_URL = "https://github.com/hkchengrex/XMem/releases/download/v1.0/XMem-s012.pth"
 XMEM_FILENAME = "XMem-s012.pth"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Headless XMem mask export with automatic init mask.",
+        description="Headless XMem mask export with mask-pipeline init mask.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--repo_root", required=True, help="Repo root (to resolve default weights).")
@@ -46,41 +36,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vis_dir", default=None, help="Optional output painted tracking frames.")
     parser.add_argument("--xmem_root", required=True, help="Directory that contains the vendored XMem runtime files.")
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--sam_model_type", default="vit_h", choices=sorted(SAM_FILENAMES.keys()))
-    parser.add_argument("--sam_checkpoint", default=None)
     parser.add_argument("--xmem_checkpoint", default=None)
-    parser.add_argument("--init_source", default="yolo", choices=["yolo", "sam_auto", "mask"])
-    parser.add_argument("--init_mask", default=None, help="Existing first-frame mask for --init_source mask.")
-    parser.add_argument("--yolo_model", default=None, help="YOLO segmentation checkpoint or model name.")
-    parser.add_argument("--yolo_conf", type=float, default=0.25)
-    parser.add_argument("--classes", default="all")
-    parser.add_argument("--max_objects", type=int, default=4)
-    parser.add_argument("--min_area_ratio", type=float, default=0.0005)
-    parser.add_argument("--max_area_ratio", type=float, default=0.80)
-    parser.add_argument("--sam_points_per_side", type=int, default=32)
+    parser.add_argument("--init_mask", required=True, help="First-frame mask from mask pipeline (indexed PNG).")
     parser.add_argument("--no_download", action="store_true")
     parser.add_argument(
         "--xmem-bidirectional",
         action="store_true",
-        help="Enable overlap-anchor refinement (same gate as non-off two_stage_anchor_idx).",
+        help="After two-stage merge, run a full reverse pass and fuse with union/intersection.",
     )
     parser.add_argument(
         "--xmem-bidirectional-merge",
         type=str,
         default="union",
         choices=["union", "intersection"],
-        help="Deprecated; kept for CLI compatibility. Overlap-anchor no longer fuses this way.",
+        help="How to fuse forward vs reverse masks in the bidirectional step.",
     )
     parser.add_argument(
         "--xmem-two-stage-anchor-idx",
         type=str,
         default="-1",
-        help="'-1' off (single forward only unless --xmem-bidirectional); 'auto' = max overlap fwd/rev; int = fixed anchor.",
+        help="'-1' off (single forward only); 'auto' = max overlap fwd/rev; int = fixed anchor frame.",
     )
     parser.add_argument("--xmem-two-stage-auto-samples", type=int, default=7)
     parser.add_argument("--xmem-two-stage-auto-max-fg-frac", type=float, default=0.92)
     parser.add_argument("--xmem-two-stage-auto-min-fg-frac", type=float, default=0.00008)
     parser.add_argument("--xmem-two-stage-auto-min-fg-pixels", type=int, default=64)
+    parser.add_argument(
+        "--xmem-two-stage-min-overlap-ratio",
+        type=float,
+        default=0.25,
+        help="Per-object min overlap ratio (intersection/forward_area) to trust a forward object at anchor.",
+    )
     return parser.parse_args()
 
 
@@ -109,124 +95,19 @@ def maybe_download(url: str, path: str, no_download: bool) -> str:
     return path
 
 
-def resolve_checkpoints(args: argparse.Namespace) -> Tuple[Optional[str], str]:
+def resolve_checkpoints(args: argparse.Namespace) -> str:
     ckpt_dir = os.path.join(args.repo_root, "ckpts", "xmem")
     xmem_checkpoint = args.xmem_checkpoint or os.path.join(ckpt_dir, XMEM_FILENAME)
-    sam_checkpoint: Optional[str] = None
-    if args.init_source == "sam_auto":
-        sam_checkpoint = args.sam_checkpoint or os.path.join(ckpt_dir, SAM_FILENAMES[args.sam_model_type])
-        sam_checkpoint = maybe_download(SAM_URLS[args.sam_model_type], sam_checkpoint, args.no_download)
-    xmem_checkpoint = maybe_download(XMEM_URL, xmem_checkpoint, args.no_download)
-    return sam_checkpoint, xmem_checkpoint
+    return maybe_download(XMEM_URL, xmem_checkpoint, args.no_download)
 
 
 def read_rgb(path: str) -> np.ndarray:
     return np.array(Image.open(path).convert("RGB"))
 
 
-def resize_bool_mask(mask: np.ndarray, h: int, w: int) -> np.ndarray:
-    if mask.shape == (h, w):
-        return mask.astype(bool)
-    resized = cv2.resize(mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-    return resized > 0
-
-
-def add_component(indexed: np.ndarray, candidate: np.ndarray, obj_id: int, min_area: int, max_area: int) -> bool:
-    candidate = candidate.astype(bool)
-    area = int(candidate.sum())
-    if area < min_area or area > max_area:
-        return False
-    write_region = candidate & (indexed == 0)
-    if int(write_region.sum()) < min_area:
-        return False
-    indexed[write_region] = obj_id
-    return True
-
-
-def parse_classes(classes: str) -> Optional[List[int]]:
-    if classes.strip().lower() in {"", "all", "none"}:
-        return None
-    return [int(x) for x in classes.split(",") if x.strip()]
-
-
-def build_yolo_init_mask(args: argparse.Namespace, first_frame_path: str) -> np.ndarray:
-    try:
-        from ultralytics import YOLO
-    except ImportError as exc:
-        raise ImportError("ultralytics is required for --init_source yolo") from exc
-
-    frame_bgr = cv2.imread(first_frame_path)
-    if frame_bgr is None:
-        raise RuntimeError(f"Cannot read first frame: {first_frame_path}")
-    h, w = frame_bgr.shape[:2]
-    min_area = int(h * w * args.min_area_ratio)
-    max_area = int(h * w * args.max_area_ratio)
-    indexed = np.zeros((h, w), dtype=np.uint8)
-
-    default_yolo = os.path.join(args.repo_root, "ckpts", "yolo", "yolov8n-seg.pt")
-    model_path = args.yolo_model or (default_yolo if os.path.isfile(default_yolo) else "yolov8n-seg.pt")
-    model = YOLO(model_path)
-    res = model(frame_bgr, classes=parse_classes(args.classes), conf=args.yolo_conf, verbose=False)[0]
-
-    candidates: List[Tuple[int, np.ndarray]] = []
-    if res.masks is not None and len(res.masks.data) > 0:
-        masks = res.masks.data.cpu().numpy() > 0.5
-        for mask in masks:
-            m = resize_bool_mask(mask, h, w)
-            candidates.append((int(m.sum()), m))
-    elif res.boxes is not None and len(res.boxes) > 0:
-        for box in res.boxes.xyxy.cpu().numpy().astype(int):
-            x1, y1, x2, y2 = box.tolist()
-            x1, x2 = max(0, x1), min(w, x2)
-            y1, y2 = max(0, y1), min(h, y2)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            m = np.zeros((h, w), dtype=bool)
-            m[y1:y2, x1:x2] = True
-            candidates.append((int(m.sum()), m))
-
-    for _, mask in sorted(candidates, key=lambda item: item[0], reverse=True):
-        next_id = int(indexed.max()) + 1
-        if next_id > max(1, min(args.max_objects, 255)):
-            break
-        add_component(indexed, mask, next_id, min_area, max_area)
-    return indexed
-
-
-def build_sam_auto_init_mask(args: argparse.Namespace, first_rgb: np.ndarray, sam_checkpoint: str) -> np.ndarray:
-    from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
-    import torch
-
-    h, w = first_rgb.shape[:2]
-    min_area = int(h * w * args.min_area_ratio)
-    max_area = int(h * w * args.max_area_ratio)
-    indexed = np.zeros((h, w), dtype=np.uint8)
-
-    sam = sam_model_registry[args.sam_model_type](checkpoint=sam_checkpoint)
-    sam.to(device=args.device)
-    generator = SamAutomaticMaskGenerator(
-        sam,
-        points_per_side=args.sam_points_per_side,
-        min_mask_region_area=max(0, min_area),
-    )
-    masks = generator.generate(first_rgb)
-    masks.sort(key=lambda item: int(item.get("area", 0)), reverse=True)
-    for item in masks:
-        next_id = int(indexed.max()) + 1
-        if next_id > max(1, min(args.max_objects, 255)):
-            break
-        add_component(indexed, item["segmentation"], next_id, min_area, max_area)
-
-    del generator
-    del sam
-    if str(args.device).startswith("cuda"):
-        torch.cuda.empty_cache()
-    return indexed
-
-
 def load_init_mask(args: argparse.Namespace, h: int, w: int) -> np.ndarray:
     if not args.init_mask:
-        raise ValueError("--init_mask is required when --init_source mask")
+        raise ValueError("--init_mask is required")
     arr = np.array(Image.open(args.init_mask))
     if arr.ndim > 2:
         arr = arr[..., 0]
@@ -293,50 +174,48 @@ def _pick_anchor_max_overlap(
     return best, areas
 
 
-def _anchor_seed_indexed(fwd_i: np.ndarray, rev_i: np.ndarray) -> np.ndarray:
-    """Per-object-id intersection; empty intersection falls back to forward mask."""
+def _anchor_seed_validated(
+    fwd_i: np.ndarray,
+    rev_i: np.ndarray,
+    min_overlap_ratio: float,
+) -> np.ndarray:
+    """Per-object validation: keep forward region only for objects whose
+    intersection with reverse covers >= min_overlap_ratio of the forward area.
+    Drops objects that only appear in one direction (likely noise)."""
     seed = np.zeros_like(fwd_i, dtype=np.uint8)
-    ids = {int(x) for x in np.unique(fwd_i).tolist()} | {int(x) for x in np.unique(rev_i).tolist()}
-    for oid in sorted(x for x in ids if x > 0):
-        inter = (fwd_i == oid) & (rev_i == oid)
-        seed[inter] = np.uint8(oid)
+    fwd_ids = {int(x) for x in np.unique(fwd_i).tolist() if x > 0}
+    for oid in sorted(fwd_ids):
+        fwd_region = fwd_i == oid
+        fwd_area = int(fwd_region.sum())
+        if fwd_area == 0:
+            continue
+        rev_region = rev_i == oid
+        overlap = int((fwd_region & rev_region).sum())
+        if overlap >= fwd_area * min_overlap_ratio:
+            seed[fwd_region] = np.uint8(oid)
     if int((seed > 0).sum()) == 0:
         return fwd_i.copy()
     return seed
 
 
-def _merge_bidir_anchor_indexed(
-    masks_left_rev_local: List[np.ndarray],
-    masks_right_fwd_local: List[np.ndarray],
-    anchor: int,
-    t: int,
-    seed: np.ndarray,
+def _fuse_bidirectional_indexed(
+    fwd: List[np.ndarray],
+    rev_mapped: List[np.ndarray],
+    merge: str,
 ) -> List[np.ndarray]:
-    """idx<anchor from prefix-reverse re-track; idx==anchor seed; idx>anchor from suffix-forward re-track."""
-    merged: List[np.ndarray] = []
-    for i in range(t):
-        if i < anchor:
-            k = anchor - i
-            merged.append(masks_left_rev_local[k].copy())
-        elif i > anchor:
-            merged.append(masks_right_fwd_local[i - anchor].copy())
-        else:
-            merged.append(seed.copy())
-    return merged
-
-
-def _stitch_painted_bidir(
-    painted_left_rev: List[np.ndarray],
-    painted_right_fwd: List[np.ndarray],
-    anchor: int,
-    t: int,
-) -> List[np.ndarray]:
+    """Union: prefer forward, fill gaps with reverse. Intersection: keep only where both agree."""
     out: List[np.ndarray] = []
-    for i in range(t):
-        if i < anchor:
-            out.append(painted_left_rev[anchor - i].copy())
+    for i in range(len(fwd)):
+        a = fwd[i]
+        b = rev_mapped[i]
+        bp = a > 0
+        br = b > 0
+        if merge == "intersection":
+            out.append(np.where(bp & br, a, 0).astype(np.uint8))
         else:
-            out.append(painted_right_fwd[i - anchor].copy())
+            u = np.where(bp, a, 0)
+            u = np.where(~bp & br, b, u)
+            out.append(u.astype(np.uint8))
     return out
 
 
@@ -357,16 +236,9 @@ def main() -> None:
     first_rgb = read_rgb(frame_paths[0])
     h, w = first_rgb.shape[:2]
 
-    sam_checkpoint, xmem_checkpoint = resolve_checkpoints(args)
+    xmem_checkpoint = resolve_checkpoints(args)
 
-    if args.init_source == "yolo":
-        template_mask = build_yolo_init_mask(args, frame_paths[0])
-    elif args.init_source == "sam_auto":
-        if not sam_checkpoint:
-            raise RuntimeError("SAM checkpoint was not resolved for --init_source sam_auto")
-        template_mask = build_sam_auto_init_mask(args, first_rgb, sam_checkpoint)
-    else:
-        template_mask = load_init_mask(args, h, w)
+    template_mask = load_init_mask(args, h, w)
 
     if template_mask.shape != (h, w):
         raise RuntimeError(f"Init mask shape {template_mask.shape} does not match first frame {(h, w)}")
@@ -374,7 +246,7 @@ def main() -> None:
         raise RuntimeError("Automatic init mask is empty.")
 
     ts_mode, ts_anchor_req = _parse_two_stage_anchor(str(args.xmem_two_stage_anchor_idx))
-    use_overlap_anchor = ts_mode != "off" or bool(args.xmem_bidirectional)
+    do_bidir = bool(args.xmem_bidirectional)
 
     old_cwd = os.getcwd()
     sys.path.insert(0, args.xmem_root)
@@ -397,36 +269,75 @@ def main() -> None:
             tracker.clear_memory()
             return masks, painted
 
-        if not use_overlap_anchor:
-            working_masks, working_painted = run_generator(images, template_mask)
+        # Determine which frame the init mask belongs to (e.g. VGGT4D 00006.png → frame 6).
+        init_stem = os.path.splitext(os.path.basename(args.init_mask))[0]
+        try:
+            init_frame_idx = int(init_stem)
+        except ValueError:
+            init_frame_idx = 0
+
+        # ---- Stage 1: forward pass from init mask ----
+        if init_frame_idx > 0:
+            images_from_init = images[init_frame_idx:]
+            masks_fwd_suffix, painted_fwd_suffix = run_generator(images_from_init, template_mask)
+            masks_fwd = [np.zeros((h, w), dtype=np.uint8) for _ in range(init_frame_idx)] + masks_fwd_suffix
+            painted_fwd = [images[i].copy() for i in range(init_frame_idx)] + painted_fwd_suffix
         else:
             masks_fwd, painted_fwd = run_generator(images, template_mask)
-            masks_rev_loc, painted_rev_loc = run_generator(list(reversed(images)), masks_fwd[-1].copy())
+
+        working_masks = [m.copy() for m in masks_fwd]
+        working_painted = [p.copy() for p in painted_fwd]
+
+        # ---- Stage 2 (optional): two-stage merge ----
+        if ts_mode != "off":
+            # Full reverse pass to compute overlap for anchor selection.
+            masks_rev_loc, _painted_rev = run_generator(list(reversed(images)), working_masks[-1].copy())
             masks_rev_global = [masks_rev_loc[t - 1 - j] for j in range(t)]
 
             anchor, overlap_areas = _pick_anchor_max_overlap(masks_fwd, masks_rev_global, ts_mode, ts_anchor_req)
             print(
-                f"[xmem] overlap-anchor idx={anchor} (mode={ts_mode}); "
+                f"[xmem] two-stage anchor idx={anchor} (mode={ts_mode}); "
                 f"per-frame overlap pixels (first/last/max): "
                 f"{overlap_areas[0] if overlap_areas else 0}/"
                 f"{overlap_areas[-1] if overlap_areas else 0}/"
                 f"{max(overlap_areas) if overlap_areas else 0}"
             )
 
-            seed = _anchor_seed_indexed(masks_fwd[anchor], masks_rev_global[anchor])
-            rev_prefix = list(reversed(images[: anchor + 1]))
-            suf = images[anchor:]
-            masks_left, painted_left = run_generator(rev_prefix, seed)
-            masks_right, painted_right = run_generator(suf, seed)
-            working_masks = _merge_bidir_anchor_indexed(masks_left, masks_right, anchor, t, seed)
-            if args.vis_dir:
-                working_painted = _stitch_painted_bidir(painted_left, painted_right, anchor, t)
+            if int((masks_fwd[anchor] > 0).sum()) == 0:
+                print(f"[xmem] WARN: forward mask empty at anchor {anchor}; keeping forward only.")
             else:
-                working_painted = list(painted_fwd)
-            print(
-                "[xmem] overlap-anchor merge: idx<anchor from prefix-reverse, "
-                "idx==anchor seed (intersection or forward fallback), idx>anchor from suffix-forward."
-            )
+                seed = _anchor_seed_validated(
+                    masks_fwd[anchor],
+                    masks_rev_global[anchor],
+                    float(args.xmem_two_stage_min_overlap_ratio),
+                )
+                rev_prefix = list(reversed(images[: anchor + 1]))
+                masks_left, painted_left = run_generator(rev_prefix, seed)
+                # idx < anchor from prefix re-track; idx >= anchor from forward.
+                for k in range(len(masks_left)):
+                    g = anchor - k
+                    if 0 <= g < anchor:
+                        working_masks[g] = masks_left[k].copy()
+                if args.vis_dir:
+                    for k in range(len(painted_left)):
+                        g = anchor - k
+                        if 0 <= g < anchor:
+                            working_painted[g] = painted_left[k].copy()
+                print(
+                    f"[xmem] two-stage merge: idx<{anchor} from prefix-reverse re-track, "
+                    f"idx>={anchor} from forward pass."
+                )
+
+        # ---- Stage 3 (optional): bidirectional fusion ----
+        if do_bidir:
+            rev_full = list(reversed(images))
+            masks_rev_loc, _painted_rev = run_generator(rev_full, working_masks[-1].copy())
+            masks_rev_global = [masks_rev_loc[t - 1 - j] for j in range(t)]
+            merge_mode = str(args.xmem_bidirectional_merge).strip().lower()
+            if merge_mode not in ("union", "intersection"):
+                raise ValueError(f"Invalid bidirectional merge: {args.xmem_bidirectional_merge!r}")
+            working_masks = _fuse_bidirectional_indexed(working_masks, masks_rev_global, merge_mode)
+            print(f"[xmem] bidirectional fusion ({merge_mode}) applied.")
     finally:
         os.chdir(old_cwd)
 

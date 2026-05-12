@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -12,7 +12,7 @@ class Params:
     model_path: Path
     conf: float = 0.25
     max_init_objects: int = 4
-    classes: List[int] = (0, 1, 2, 3, 5, 7)
+    classes: Optional[List[int]] = None
 
 
 def _safe_box(x1: int, y1: int, x2: int, y2: int, w: int, h: int):
@@ -42,7 +42,7 @@ def run(*, first_frame: Path, out_mask: Path, params: Params) -> dict:
 
     h, w = frame.shape[:2]
     model = YOLO(str(params.model_path))
-    res = model(frame, classes=list(params.classes), conf=float(params.conf), verbose=False)[0]
+    res = model(frame, classes=params.classes, conf=float(params.conf), verbose=False)[0]
 
     indexed_mask = np.zeros((h, w), dtype=np.uint8)
     max_init_objects = max(1, min(int(params.max_init_objects), 255))
@@ -96,14 +96,19 @@ def main() -> None:
     ap.add_argument("--out_mask", required=True)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--max_init_objects", type=int, default=4)
-    ap.add_argument("--classes", default="0,1,2,3,5,7")
+    ap.add_argument("--classes", default="all")
     args = ap.parse_args()
+
+    classes_raw = str(args.classes).strip().lower()
+    classes: Optional[List[int]] = None
+    if classes_raw not in ("", "all", "none"):
+        classes = [int(x) for x in str(args.classes).split(",") if x.strip() != ""]
 
     params = Params(
         model_path=Path(args.model_path),
         conf=float(args.conf),
         max_init_objects=int(args.max_init_objects),
-        classes=[int(x) for x in str(args.classes).split(",") if x.strip() != ""],
+        classes=classes,
     )
     run(first_frame=Path(args.first_frame), out_mask=Path(args.out_mask), params=params)
 

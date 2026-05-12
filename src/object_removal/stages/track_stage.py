@@ -152,6 +152,7 @@ def run_track_stage(
         meta = xmem.run(
             repo_root=root,
             frames_dir=frames_dir,
+            in_masks_dir=in_masks_dir,
             out_binary_dir=out_dir,
             params=xmem.Params(),
             options=xmem_options,

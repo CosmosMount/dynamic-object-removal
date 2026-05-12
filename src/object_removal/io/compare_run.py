@@ -94,6 +94,36 @@ def load_pipelines_yaml(path: Path) -> Dict[str, Dict[str, Any]]:
             if k not in merged or not isinstance(merged[k], str) or not merged[k].strip():
                 raise ValueError(f"Pipeline {pid!r} missing string field {k!r} in {path}")
         out[str(pid)] = merged
+
+    # Validate share_mask_track_from cross-references.
+    for pid, spec in out.items():
+        share_base = spec.get("share_mask_track_from")
+        if share_base is None:
+            continue
+        if not isinstance(share_base, str) or not share_base.strip():
+            raise ValueError(
+                f"Pipeline {pid!r}: `share_mask_track_from` must be a non-empty string in {path}"
+            )
+        share_base = share_base.strip()
+        spec["share_mask_track_from"] = share_base
+        if share_base not in out:
+            raise ValueError(
+                f"Pipeline {pid!r}: `share_mask_track_from={share_base!r} "
+                f"references unknown pipeline. Known: {sorted(out.keys())} "
+                f"(config: {path})"
+            )
+        base_spec = out[share_base]
+        if spec.get("mask") != base_spec.get("mask"):
+            raise ValueError(
+                f"Pipeline {pid!r}: `share_mask_track_from={share_base!r} "
+                f"mask method mismatch: {spec.get('mask')!r} != {base_spec.get('mask')!r}"
+            )
+        if spec.get("track") != base_spec.get("track"):
+            raise ValueError(
+                f"Pipeline {pid!r}: `share_mask_track_from={share_base!r} "
+                f"track method mismatch: {spec.get('track')!r} != {base_spec.get('track')!r}"
+            )
+
     return out
 
 
@@ -318,6 +348,37 @@ def resolve_compare_context(
                 f"(config: {pipelines_config_path})"
             )
 
+    # Topological sort: base pipelines (share_mask_track_from targets) must run before dependents.
+    _in_degree: Dict[str, int] = {pid: 0 for pid in pipeline_ids}
+    _adj: Dict[str, List[str]] = {pid: [] for pid in pipeline_ids}
+    for pid in pipeline_ids:
+        spec = registry.get(pid, {})
+        base = spec.get("share_mask_track_from")
+        if isinstance(base, str) and base.strip():
+            base = base.strip()
+            if base in pipeline_ids:
+                _adj.setdefault(base, []).append(pid)
+                _in_degree[pid] = _in_degree.get(pid, 0) + 1
+
+    from collections import deque
+
+    _queue = deque([pid for pid in pipeline_ids if _in_degree[pid] == 0])
+    _sorted: List[str] = []
+    while _queue:
+        pid = _queue.popleft()
+        _sorted.append(pid)
+        for dep in _adj.get(pid, []):
+            _in_degree[dep] -= 1
+            if _in_degree[dep] == 0:
+                _queue.append(dep)
+
+    if len(_sorted) != len(pipeline_ids):
+        raise ValueError(
+            "Cycle detected in share_mask_track_from dependencies among selected pipelines: "
+            f"{pipeline_ids}"
+        )
+    pipeline_ids = _sorted
+
     # Eval reads existing run artifacts only, so it may iterate over multiple pipelines.
     if only_stage is not None and only_stage != "eval" and len(pipeline_ids) != 1:
         raise ValueError(
@@ -385,3 +446,48 @@ def env_for(env_map: Dict[str, Dict[str, str]], *, stage: str, method: str) -> s
     if stage == "eval":
         return str(stage_map.get(method, stage_map.get("default", "")) or "")
     return str(stage_map.get(method, "") or "")
+
+
+def expand_davis_tasks(task_spec: str, davis_root: Path) -> List[str]:
+    """Expand a task spec into a list of DAVIS sequence names.
+
+    Supported forms:
+      - ``davis:SEQ``  -> single sequence (returns ``[SEQ]``)
+      - ``davis:all``  -> all sequences found under davis_root/JPEGImages/480p/
+      - ``davis:[s1,s2,...]`` -> explicit list
+
+    Raises ValueError if no valid frames directory is found for a listed sequence.
+    """
+    if not task_spec.startswith("davis:"):
+        raise ValueError(f"Only davis:SEQ / davis:all / davis:[...] supported, got {task_spec!r}")
+
+    rest = task_spec[len("davis:"):].strip()
+
+    # davis:[seq1,seq2,...]
+    if rest.startswith("[") and rest.endswith("]"):
+        inner = rest[1:-1].strip()
+        if not inner:
+            return []
+        seqs = [s.strip() for s in inner.split(",") if s.strip()]
+    elif rest.lower() == "all":
+        jpeg_dir = davis_root / "JPEGImages" / "480p"
+        if not jpeg_dir.is_dir():
+            raise FileNotFoundError(f"DAVIS JPEGImages dir not found: {jpeg_dir}")
+        seqs = sorted(
+            d.name
+            for d in jpeg_dir.iterdir()
+            if d.is_dir() and count_rgb_frames(d) > 0
+        )
+    else:
+        seqs = [rest]
+
+    if not seqs:
+        raise ValueError(f"No sequences resolved from task spec: {task_spec!r}")
+
+    # Verify each sequence directory exists
+    for seq in seqs:
+        jpeg_dir = davis_root / "JPEGImages" / "480p" / seq
+        if not jpeg_dir.is_dir() or count_rgb_frames(jpeg_dir) == 0:
+            raise FileNotFoundError(f"DAVIS frames not found for seq {seq!r}: {jpeg_dir}")
+
+    return seqs

@@ -6,7 +6,7 @@
 # - `davis_root` is resolved relative to the repository root when not absolute.
 # - Omit `out_root` to use the default `outputs/compare/<SEQ>`.
 
-task: davis:cat-girl
+task: davis:scooter-board
 davis_root: data/DAVIS
 # out_root: outputs/compare/cat-girl
 
@@ -19,18 +19,20 @@ davis_root: data/DAVIS
 
 pipelines_config: configs/pipelines.yaml
 pipelines:
-  - vggt4d_sam3_propainter
-  - vggt4d_sam3_diffueraser
+  # - yolo_xmem
+  - vggt4d_xmem
+  # - vggt4d_sam3
+#   - vggt4d_sam3_diffueraser
   # - vggt4d_sam3_propainter
 # run_all_pipelines: true
-only_stage: eval
+# only_stage: eval
 
 # Output behavior:
 # - `overwrite: true` clears existing outputs for the selected stage before rerunning it.
 # - `export_mask_vis: true` writes `runs/<pipeline>/track/mask_vis.mp4` after track.
 # - `mask_vis_fps` and `mask_vis_alpha` are optional overlay settings used only when mask video export is enabled.
 
-# overwrite: true
+overwrite: true
 export_mask_vis: true
 # mask_vis_fps: 10
 # mask_vis_alpha: 0.5
