@@ -1,0 +1,29 @@
+name: FasterVQA-MT
+data:
+  val-kv1k:
+    args:
+      sample_types:
+        fragments:
+          fragments_h: 7
+          fragments_w: 7
+          fsize_h: 32
+          fsize_w: 32
+          aligned: 8
+          clip_len: 16
+          frame_interval: 2
+          t_frag: 4
+          num_clips: 1
+model:
+  type: DiViDeAddEvaluator
+  args:
+    backbone:
+      fragments:
+        checkpoint: false
+        pretrained:
+    backbone_size: swin_tiny_grpb
+    backbone_preserve_keys: fragments
+    divide_head: false
+    vqa_head:
+      in_channels: 768
+      hidden_channels: 64
+test_load_path: ../../ckpts/fastvqa/FAST_VQA_3D_1_1.pth

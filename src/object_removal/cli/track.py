@@ -15,63 +15,77 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overwrite", action="store_true", default=False)
     p.add_argument("--repo_root", default=".", help="Repo root (required layout for sam3 / sam2 ckpt paths).")
     p.add_argument("--sam3-checkpoint", default="ckpts/sam3/sam3.pt", help="Used when --method sam3")
-    p.add_argument("--sam3-two-stage-anchor-idx", default="auto", help="Used when --method sam3")
-    p.add_argument("--sam3-two-stage-auto-samples", type=int, default=7, help="Used when --method sam3")
+    p.add_argument(
+        "--sam3-two-stage-anchor-idx",
+        default="auto",
+        help="Used when --method sam3: overlap-anchor (-1=off, auto=max overlap, int=fixed anchor).",
+    )
+    p.add_argument(
+        "--sam3-two-stage-auto-samples",
+        type=int,
+        default=7,
+        help="Used when --method sam3 (deprecated; kept for CLI compatibility).",
+    )
     p.add_argument(
         "--sam3-two-stage-auto-max-fg-frac",
         type=float,
         default=0.92,
-        help="Used when --method sam3 (two-stage auto anchor)",
+        help="Used when --method sam3 (deprecated).",
     )
     p.add_argument(
         "--sam3-two-stage-auto-min-fg-frac",
         type=float,
         default=0.00008,
-        help="Used when --method sam3 (two-stage auto anchor)",
+        help="Used when --method sam3 (deprecated).",
     )
     p.add_argument(
         "--sam3-two-stage-auto-min-fg-pixels",
         type=int,
         default=64,
-        help="Used when --method sam3 (two-stage auto anchor)",
+        help="Used when --method sam3 (deprecated).",
     )
     p.add_argument("--sam3-score-thresh", type=float, default=0.0, help="Used when --method sam3")
     p.add_argument(
         "--xmem-bidirectional",
         action="store_true",
-        help="Used when --method xmem: extra reverse pass from last mask, fused with primary.",
+        help="Used when --method xmem: enable overlap-anchor (same gate as non-off two_stage_anchor_idx).",
     )
     p.add_argument(
         "--xmem-bidirectional-merge",
         type=str,
         default="union",
         choices=["union", "intersection"],
-        help="Used when --method xmem",
+        help="Used when --method xmem (deprecated; ignored).",
     )
     p.add_argument(
         "--xmem-two-stage-anchor-idx",
         type=str,
         default="-1",
-        help="Used when --method xmem: -1 off, auto, or frame index (re-track prefix from anchor).",
+        help="Used when --method xmem: -1 off unless --xmem-bidirectional; auto=max overlap; int=fixed anchor.",
     )
-    p.add_argument("--xmem-two-stage-auto-samples", type=int, default=7, help="Used when --method xmem")
+    p.add_argument(
+        "--xmem-two-stage-auto-samples",
+        type=int,
+        default=7,
+        help="Used when --method xmem (deprecated).",
+    )
     p.add_argument(
         "--xmem-two-stage-auto-max-fg-frac",
         type=float,
         default=0.92,
-        help="Used when --method xmem (two-stage auto anchor)",
+        help="Used when --method xmem (deprecated).",
     )
     p.add_argument(
         "--xmem-two-stage-auto-min-fg-frac",
         type=float,
         default=0.00008,
-        help="Used when --method xmem (two-stage auto anchor)",
+        help="Used when --method xmem (deprecated).",
     )
     p.add_argument(
         "--xmem-two-stage-auto-min-fg-pixels",
         type=int,
         default=64,
-        help="Used when --method xmem (two-stage auto anchor)",
+        help="Used when --method xmem (deprecated).",
     )
     return p
 

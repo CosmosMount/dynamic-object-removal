@@ -5,6 +5,7 @@ from pathlib import Path
 
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
+from object_removal.metrics.fast_vqa import resolve_fast_vqa_root
 from object_removal.stages.eval_stage import EvalInputs, run_eval
 
 
@@ -36,6 +37,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--video_metric_impl", choices=["internal", "propainter"], default="internal")
     p.add_argument("--propainter_root", default="", help="Required if video_metric_impl=propainter")
+    p.add_argument(
+        "--fast-vqa",
+        action="store_true",
+        default=False,
+        help="Run FastVQA/FasterVQA on pred_frames_dir (uses --fast-vqa-root, FAST_VQA_ROOT, FAST_VQA_PYTHON, or repo defaults).",
+    )
+    p.add_argument(
+        "--fast-vqa-root",
+        default="",
+        help="Path to FAST-VQA-and-FasterVQA clone (contains vqa.py).",
+    )
+    p.add_argument("--fast-vqa-model", default="FasterVQA", help="vqa.py -m model name.")
+    p.add_argument("--fast-vqa-device", default="cuda", help="vqa.py -d device.")
+    p.add_argument("--fast-vqa-fps", type=float, default=24.0, help="FPS when muxing frames to MP4.")
+    p.add_argument(
+        "--fast-vqa-python",
+        default="",
+        help="Python to run upstream vqa.py (default: FAST_VQA_PYTHON env or current interpreter).",
+    )
     return p
 
 
@@ -43,6 +63,9 @@ def main() -> None:
     args = build_parser().parse_args()
     layout = RunLayout(Path(args.run_dir))
     ensure_layout_dirs(layout)
+
+    repo_root = Path.cwd().resolve()
+    fv_root = resolve_fast_vqa_root(repo_root=repo_root, raw_root=args.fast_vqa_root)
 
     inputs = EvalInputs(
         output_dir=layout.eval_dir,
@@ -58,6 +81,12 @@ def main() -> None:
         gt_frames_dir=Path(args.gt_frames_dir) if args.gt_frames_dir else None,
         source_frames_dir=Path(args.source_frames_dir) if args.source_frames_dir else None,
         video_metric_impl=args.video_metric_impl,
+        fast_vqa=bool(args.fast_vqa),
+        fast_vqa_root=fv_root,
+        fast_vqa_model=str(args.fast_vqa_model),
+        fast_vqa_device=str(args.fast_vqa_device),
+        fast_vqa_fps=float(args.fast_vqa_fps),
+        fast_vqa_python=(args.fast_vqa_python or "").strip() or None,
     )
 
     propainter_root = Path(args.propainter_root) if args.propainter_root else None
@@ -68,7 +97,8 @@ def main() -> None:
     print(f"Wrote: {layout.eval_metrics_csv}")
     print(
         f"mask_jm={summary.get('mask_jm')} mask_jr={summary.get('mask_jr')} "
-        f"mask_score={summary.get('mask_score')} quality_score={summary.get('quality_score')}"
+        f"mask_score={summary.get('mask_score')} quality_score={summary.get('quality_score')} "
+        f"fast_vqa_score={summary.get('fast_vqa_score')}"
     )
 
 

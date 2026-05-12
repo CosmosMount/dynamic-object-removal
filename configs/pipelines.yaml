@@ -25,20 +25,17 @@
 # Track options (`sam3:`) for `track: sam3`:
 #   checkpoint: str                 # SAM3 checkpoint path; defaults to `ckpts/sam3/sam3.pt`.
 #   two_stage_anchor_idx: auto|-1|int
-#   two_stage_auto_samples: int
-#   two_stage_auto_max_fg_frac: float
-#   two_stage_auto_min_fg_frac: float
-#   two_stage_auto_min_fg_pixels: int
+#       Overlap-anchor: forward-only probe, mirrored reverse from last frame, max-overlap keyframe,
+#       per-id intersection seed, then one full bidirectional propagate from anchor. `-1` = single
+#       bidirectional pass from the original init mask only.
+#   two_stage_auto_samples / two_stage_auto_* : deprecated (CLI compatibility only).
 #   score_thresh: float
 #
-# Track options (`xmem:`) for `track: xmem` (SAM3-style heuristics on top of XMem forward passes):
-#   bidirectional: bool              # Extra full-sequence reverse pass from the last-frame mask; fused with primary.
-#   bidirectional_merge: union|intersection
-#   two_stage_anchor_idx: -1|auto|int   # `-1` off; `auto` picks anchor from stage1 masks; int = fixed anchor index.
-#   two_stage_auto_samples: int
-#   two_stage_auto_max_fg_frac: float
-#   two_stage_auto_min_fg_frac: float
-#   two_stage_auto_min_fg_pixels: int
+# Track options (`xmem:`) for `track: xmem`:
+#   bidirectional: bool              # If true, enable overlap-anchor (same as non-off two_stage_anchor_idx).
+#   bidirectional_merge: union|intersection  # Deprecated (ignored).
+#   two_stage_anchor_idx: -1|auto|int   # `-1` off unless bidirectional; `auto` = max overlap; int = fixed anchor.
+#   two_stage_auto_* : deprecated (kept for YAML compatibility).
 #
 # Inpaint options (`diffueraser:`) for `inpaint: diffueraser`:
 #   video_length: int               # If omitted, compare uses `ceil(num_frames / 24)`.
@@ -121,24 +118,13 @@ pipelines:
   yolo_xmem:
     mask: yolo_first
     track: xmem
-    inpaint: diffueraser
+    inpaint: propainter
 
   # VGGT-based variants.
   vggt4d_xmem:
     mask: vggt4d
     track: xmem
     inpaint: propainter
-    # Optional: bidirectional + two-stage anchor (see header `xmem:` docs).
-    xmem:
-      bidirectional: true
-      bidirectional_merge: union
-      two_stage_anchor_idx: auto
-
-  vggt4d_xmem_diffueraser:
-    mask: vggt4d
-    track: xmem
-    inpaint: diffueraser
-    # Optional: bidirectional + two-stage anchor (see header `xmem:` docs).
     xmem:
       bidirectional: true
       bidirectional_merge: union
@@ -149,12 +135,12 @@ pipelines:
     track: identity
     inpaint: propainter
 
-  vggt4d_diffueraser:
-    mask: vggt_framewise
-    track: identity
-    inpaint: diffueraser
+  # vggt4d_diffueraser:
+  #   mask: vggt_framewise
+  #   track: identity
+  #   inpaint: diffueraser
 
-  vggt4d_sam3_propainter:
+  vggt4d_sam3:
     mask: vggt4d
     track: sam3
     inpaint: propainter

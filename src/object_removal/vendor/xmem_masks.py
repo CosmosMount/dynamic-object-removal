@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 """
-Vendored XMem batch tracker with optional SAM3-style merge heuristics.
+Vendored XMem batch tracker with optional overlap-anchor bidirectional refinement.
 
 Changes:
 - Default YOLO path prefers repo_root/ckpts/yolo/yolov8n-seg.pt.
-- Optional SAM3-style two-stage anchor merge + bidirectional fusion (`--xmem-*` flags).
+- Optional overlap-anchor path (`--xmem-*`): full forward, mirrored full reverse from
+  last-frame mask, pick max-overlap keyframe, intersect seed, bidirectional re-track from anchor.
 - Directly uses XMem `BaseTracker` without any interactive wrapper layer.
 """
 
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -61,20 +62,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--xmem-bidirectional",
         action="store_true",
-        help="After the primary forward pass, run a reverse pass from the last-frame mask and fuse.",
+        help="Enable overlap-anchor refinement (same gate as non-off two_stage_anchor_idx).",
     )
     parser.add_argument(
         "--xmem-bidirectional-merge",
         type=str,
         default="union",
         choices=["union", "intersection"],
-        help="How to fuse forward vs reverse binary masks.",
+        help="Deprecated; kept for CLI compatibility. Overlap-anchor no longer fuses this way.",
     )
     parser.add_argument(
         "--xmem-two-stage-anchor-idx",
         type=str,
         default="-1",
-        help="Two-stage: '-1' off; int = fixed anchor frame index; 'auto' = pick anchor from stage1 masks.",
+        help="'-1' off (single forward only unless --xmem-bidirectional); 'auto' = max overlap fwd/rev; int = fixed anchor.",
     )
     parser.add_argument("--xmem-two-stage-auto-samples", type=int, default=7)
     parser.add_argument("--xmem-two-stage-auto-max-fg-frac", type=float, default=0.92)
@@ -269,95 +270,73 @@ def _parse_two_stage_anchor(raw: str) -> Tuple[str, int]:
     return "fixed", v
 
 
-def indexed_masks_to_outputs(masks: List[np.ndarray]) -> Dict[int, Dict[int, np.ndarray]]:
-    """SAM3-style frame_idx -> obj_id -> bool mask (for pick_auto_anchor)."""
-    outputs: Dict[int, Dict[int, np.ndarray]] = {}
-    for idx, im in enumerate(masks):
-        per: Dict[int, np.ndarray] = {}
-        for obj_id in np.unique(im):
-            oid = int(obj_id)
-            if oid <= 0:
-                continue
-            per[oid] = im == oid
-        outputs[idx] = per
-    return outputs
+def _overlap_areas_indexed(masks_fwd: List[np.ndarray], masks_rev: List[np.ndarray]) -> List[int]:
+    return [int(np.logical_and(masks_fwd[i] > 0, masks_rev[i] > 0).sum()) for i in range(len(masks_fwd))]
 
 
-def _pick_anchor_auto_xmem(
-    masks1: List[np.ndarray],
-    frame_stems: List[str],
-    h: int,
-    w: int,
-    num_samples: int,
-    max_fg_frac: float,
-    min_fg_frac: float,
-    min_fg_pixels: int,
-) -> Tuple[int, List[Tuple[int, int, float, bool, float]]]:
-    from object_removal.vendor.sam3_vos import pick_auto_anchor
-
-    outputs1 = indexed_masks_to_outputs(masks1)
-    return pick_auto_anchor(
-        outputs1,
-        frame_stems,
-        h,
-        w,
-        int(num_samples),
-        float(max_fg_frac),
-        float(min_fg_frac),
-        int(min_fg_pixels),
-    )
+def _pick_anchor_max_overlap(
+    masks_fwd: List[np.ndarray],
+    masks_rev_global: List[np.ndarray],
+    ts_mode: str,
+    ts_anchor_req: int,
+) -> Tuple[int, List[int]]:
+    t = len(masks_fwd)
+    if ts_mode == "fixed":
+        anchor = min(max(0, ts_anchor_req), t - 1)
+        areas = _overlap_areas_indexed(masks_fwd, masks_rev_global)
+        return anchor, areas
+    areas = _overlap_areas_indexed(masks_fwd, masks_rev_global)
+    max_a = max(areas) if areas else 0
+    if max_a <= 0:
+        return (t // 2) if t > 0 else 0, areas
+    best = max(i for i, a in enumerate(areas) if a == max_a)
+    return best, areas
 
 
-def _merge_two_stage_indexed(
-    masks1: List[np.ndarray],
-    masks_bwd_local: List[np.ndarray],
+def _anchor_seed_indexed(fwd_i: np.ndarray, rev_i: np.ndarray) -> np.ndarray:
+    """Per-object-id intersection; empty intersection falls back to forward mask."""
+    seed = np.zeros_like(fwd_i, dtype=np.uint8)
+    ids = {int(x) for x in np.unique(fwd_i).tolist()} | {int(x) for x in np.unique(rev_i).tolist()}
+    for oid in sorted(x for x in ids if x > 0):
+        inter = (fwd_i == oid) & (rev_i == oid)
+        seed[inter] = np.uint8(oid)
+    if int((seed > 0).sum()) == 0:
+        return fwd_i.copy()
+    return seed
+
+
+def _merge_bidir_anchor_indexed(
+    masks_left_rev_local: List[np.ndarray],
+    masks_right_fwd_local: List[np.ndarray],
     anchor: int,
+    t: int,
+    seed: np.ndarray,
 ) -> List[np.ndarray]:
-    """SAM3-style merge: idx<=anchor from re-track (backward chunk), idx>anchor from stage1."""
-    t = len(masks1)
-    merged = [masks1[i].copy() for i in range(t)]
-    for k in range(len(masks_bwd_local)):
-        g = anchor - k
-        if 0 <= g < t:
-            merged[g] = masks_bwd_local[k].copy()
-    for i in range(anchor + 1, t):
-        merged[i] = masks1[i].copy()
+    """idx<anchor from prefix-reverse re-track; idx==anchor seed; idx>anchor from suffix-forward re-track."""
+    merged: List[np.ndarray] = []
+    for i in range(t):
+        if i < anchor:
+            k = anchor - i
+            merged.append(masks_left_rev_local[k].copy())
+        elif i > anchor:
+            merged.append(masks_right_fwd_local[i - anchor].copy())
+        else:
+            merged.append(seed.copy())
     return merged
 
 
-def _stitch_painted_two_stage(
-    painted1: List[np.ndarray],
-    painted_bwd: List[np.ndarray],
+def _stitch_painted_bidir(
+    painted_left_rev: List[np.ndarray],
+    painted_right_fwd: List[np.ndarray],
     anchor: int,
     t: int,
 ) -> List[np.ndarray]:
     out: List[np.ndarray] = []
-    for g in range(t):
-        if g <= anchor:
-            k = anchor - g
-            out.append(painted_bwd[k].copy())
+    for i in range(t):
+        if i < anchor:
+            out.append(painted_left_rev[anchor - i].copy())
         else:
-            out.append(painted1[g].copy())
-    return out
-
-
-def _fuse_bidirectional_indexed(
-    fwd: List[np.ndarray],
-    rev_mapped: List[np.ndarray],
-    merge: str,
-) -> List[np.ndarray]:
-    out: List[np.ndarray] = []
-    for i in range(len(fwd)):
-        a = fwd[i]
-        b = rev_mapped[i]
-        bp = a > 0
-        br = b > 0
-        if merge == "intersection":
-            out.append(np.where(bp & br, a, 0).astype(np.uint8))
-        else:
-            u = np.where(bp, a, 0)
-            u = np.where(~bp & br, b, u)
-            out.append(u.astype(np.uint8))
+            out.append(painted_right_fwd[i - anchor].copy())
     return out
 
 
@@ -395,7 +374,7 @@ def main() -> None:
         raise RuntimeError("Automatic init mask is empty.")
 
     ts_mode, ts_anchor_req = _parse_two_stage_anchor(str(args.xmem_two_stage_anchor_idx))
-    stems = [os.path.splitext(os.path.basename(p))[0] for p in frame_paths]
+    use_overlap_anchor = ts_mode != "off" or bool(args.xmem_bidirectional)
 
     old_cwd = os.getcwd()
     sys.path.insert(0, args.xmem_root)
@@ -418,56 +397,36 @@ def main() -> None:
             tracker.clear_memory()
             return masks, painted
 
-        masks1, painted1 = run_generator(images, template_mask)
-
-        working_masks = [m.copy() for m in masks1]
-        working_painted = [p.copy() for p in painted1]
-
-        if ts_mode != "off":
-            if ts_mode == "auto":
-                anchor, cand_rows = _pick_anchor_auto_xmem(
-                    masks1,
-                    stems,
-                    h,
-                    w,
-                    int(args.xmem_two_stage_auto_samples),
-                    float(args.xmem_two_stage_auto_max_fg_frac),
-                    float(args.xmem_two_stage_auto_min_fg_frac),
-                    int(args.xmem_two_stage_auto_min_fg_pixels),
-                )
-                print(
-                    f"[xmem] two-stage auto anchor idx={anchor} "
-                    f"(candidates idx,pixels,frac,stripe,fill: "
-                    f"{[(i, int(a), round(f, 4), st, round(fl, 3)) for i, a, f, st, fl in cand_rows]})"
-                )
-            else:
-                anchor = min(max(0, ts_anchor_req), t - 1)
-                print(f"[xmem] two-stage fixed anchor idx={anchor} (requested={ts_anchor_req})")
-
-            if int((masks1[anchor] > 0).sum()) == 0:
-                print(f"[xmem] WARN: stage1 empty at anchor {anchor}; keeping stage1 only.")
-            else:
-                rev_prefix = list(reversed(images[: anchor + 1]))
-                tmpl_a = masks1[anchor].copy()
-                masks_bwd, painted_bwd = run_generator(rev_prefix, tmpl_a)
-                working_masks = _merge_two_stage_indexed(masks1, masks_bwd, anchor)
-                if args.vis_dir:
-                    working_painted = _stitch_painted_two_stage(painted1, painted_bwd, anchor, t)
-                print(
-                    f"[xmem] two-stage merge: idx<={anchor} from re-track "
-                    f"(prefix reversed), idx>{anchor} from stage1."
-                )
-
-        if args.xmem_bidirectional:
-            rev_full = list(reversed(images))
-            tmpl_last = working_masks[-1].copy()
-            masks_rev_loc, _painted_rev = run_generator(rev_full, tmpl_last)
+        if not use_overlap_anchor:
+            working_masks, working_painted = run_generator(images, template_mask)
+        else:
+            masks_fwd, painted_fwd = run_generator(images, template_mask)
+            masks_rev_loc, painted_rev_loc = run_generator(list(reversed(images)), masks_fwd[-1].copy())
             masks_rev_global = [masks_rev_loc[t - 1 - j] for j in range(t)]
-            merge_mode = str(args.xmem_bidirectional_merge).strip().lower()
-            if merge_mode not in ("union", "intersection"):
-                raise ValueError(f"Invalid bidirectional merge: {args.xmem_bidirectional_merge!r}")
-            working_masks = _fuse_bidirectional_indexed(working_masks, masks_rev_global, merge_mode)
-            print(f"[xmem] bidirectional fuse ({merge_mode}) applied after primary pipeline.")
+
+            anchor, overlap_areas = _pick_anchor_max_overlap(masks_fwd, masks_rev_global, ts_mode, ts_anchor_req)
+            print(
+                f"[xmem] overlap-anchor idx={anchor} (mode={ts_mode}); "
+                f"per-frame overlap pixels (first/last/max): "
+                f"{overlap_areas[0] if overlap_areas else 0}/"
+                f"{overlap_areas[-1] if overlap_areas else 0}/"
+                f"{max(overlap_areas) if overlap_areas else 0}"
+            )
+
+            seed = _anchor_seed_indexed(masks_fwd[anchor], masks_rev_global[anchor])
+            rev_prefix = list(reversed(images[: anchor + 1]))
+            suf = images[anchor:]
+            masks_left, painted_left = run_generator(rev_prefix, seed)
+            masks_right, painted_right = run_generator(suf, seed)
+            working_masks = _merge_bidir_anchor_indexed(masks_left, masks_right, anchor, t, seed)
+            if args.vis_dir:
+                working_painted = _stitch_painted_bidir(painted_left, painted_right, anchor, t)
+            else:
+                working_painted = list(painted_fwd)
+            print(
+                "[xmem] overlap-anchor merge: idx<anchor from prefix-reverse, "
+                "idx==anchor seed (intersection or forward fallback), idx>anchor from suffix-forward."
+            )
     finally:
         os.chdir(old_cwd)
 

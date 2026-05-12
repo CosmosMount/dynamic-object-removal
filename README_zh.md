@@ -255,6 +255,8 @@ python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS
 python -m object_removal.cli.eval   --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --source_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
 ```
 
+可选 **FastVQA / FasterVQA**（无参考 inpaint 视频质量）：建议将 [FAST-VQA-and-FasterVQA](https://github.com/VQAssessment/FAST-VQA-and-FasterVQA) 克隆到 `modules/FAST-VQA-and-FasterVQA`，并按其 README 安装依赖与配置权重；这样本项目会自动发现该目录。也可在 `configs/compare.yaml` 中设置 `eval.fast_vqa_root`，或对上述 `eval` 命令追加 `--fast-vqa --fast-vqa-root /path/to/repo`。`vqa.py` 默认用当前解释器运行；若出现 `rc=-11`（多为 SIGSEGV，常见于 CUDA/torch/decord 与当前 conda 环境不匹配），可设置环境变量 `FAST_VQA_PYTHON` 指向已装好 fastvqa 依赖的 Python，或将 `eval.fast_vqa_device` 设为 `cpu`（本仓库也会在 cuda 子进程异常退出时自动尝试一次 CPU）。分数写入每条 run 的 `eval/metrics_summary.json` 字段 `fast_vqa_score`（约 0–1，越大越好），`compare` 汇总表 `combined.csv` 中列为 `fast_vqa_score`。
+
 ---
 
 

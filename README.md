@@ -254,6 +254,8 @@ python -m object_removal.cli.inpaint --run_dir runs/demo --frames_dir data/DAVIS
 python -m object_removal.cli.eval    --run_dir runs/demo --pred_mask_dir runs/demo/track/masks_binary --gt_mask_dir data/DAVIS/Annotations_unsupervised/480p/bmx-trees --pred_frames_dir runs/demo/inpaint/frames --source_frames_dir data/DAVIS/JPEGImages/480p/bmx-trees
 ```
 
+Optional **FastVQA / FasterVQA** (no-reference inpaint quality): preferably clone [FAST-VQA-and-FasterVQA](https://github.com/VQAssessment/FAST-VQA-and-FasterVQA) to `modules/FAST-VQA-and-FasterVQA`, then install its deps and checkpoints per the upstream README; this repo now auto-detects that default location. You can still set `eval.fast_vqa_root` in `configs/compare.yaml`, or pass `--fast-vqa --fast-vqa-root /path/to/repo` to `object_removal.cli.eval`. By default `vqa.py` runs under the current Python; if you see `rc=-11` (often SIGSEGV from CUDA/torch/decord mismatch with the active conda env), set `FAST_VQA_PYTHON` to a Python that has the upstream deps installed, or set `eval.fast_vqa_device` to `cpu` (this repo also retries once on CPU after a CUDA subprocess crash). Writes `fast_vqa_score` (roughly 0–1, higher is better) into each run’s `eval/metrics_summary.json` and the `fast_vqa_score` column in `compare`’s `combined.csv`.
+
 ---
 
 

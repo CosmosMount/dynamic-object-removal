@@ -11,5 +11,6 @@ ckpts/
 AGENTS.md
 PLAN.md
 TASK.md
+MEMORY.md
 *.egg-info/
 report/

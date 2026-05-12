@@ -56,6 +56,7 @@ def _load_metrics_row(path: Path, method_name: str) -> Dict[str, Any]:
         "temporal_warp_error_mean": _safe_float(data.get("temporal_warp_error_mean")),
         "temporal_warp_error_hole_mean": _safe_float(data.get("temporal_warp_error_hole_mean")),
         "laplacian_var_mean": _safe_float(data.get("laplacian_var_mean")),
+        "fast_vqa_score": _safe_float(data.get("fast_vqa_score")),
     }
 
 
@@ -73,6 +74,7 @@ def _write_combined(rows: List[Dict[str, Any]], out_csv: Path, out_md: Path) -> 
         "temporal_warp_error_mean",
         "temporal_warp_error_hole_mean",
         "laplacian_var_mean",
+        "fast_vqa_score",
     ]
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +146,66 @@ def _require_envs(conda_exe: str, required: List[str]) -> None:
     raise RuntimeError("\n".join(msg))
 
 
+def _collect_required_envs(ctx: CompareRunContext) -> List[str]:
+    """Conda env names required for the selected only_stage (or full pipeline)."""
+    req: List[str] = []
+    st = ctx.only_stage
+    for name in ctx.pipeline_ids:
+        spec = ctx.registry[name]
+        if st is None or st == "mask":
+            req.append(env_for(ctx.env_map, stage="mask", method=str(spec["mask"])))
+        if st is None or st == "track":
+            req.append(env_for(ctx.env_map, stage="track", method=str(spec["track"])))
+        if st is None or st == "inpaint":
+            req.append(env_for(ctx.env_map, stage="inpaint", method=str(spec["inpaint"])))
+        if st is None or st == "eval":
+            req.append(env_for(ctx.env_map, stage="eval", method="internal"))
+    return req
+
+
+def _eval_fast_vqa_kwargs(
+    cfg: Dict[str, Any],
+    *,
+    repo_root: Path,
+    cli_fast_vqa: bool,
+    cli_root: Optional[str],
+    cli_model: Optional[str],
+    cli_device: Optional[str],
+    cli_fps: Optional[float],
+    cli_python: Optional[str],
+) -> Dict[str, Any]:
+    from object_removal.metrics.fast_vqa import resolve_fast_vqa_root
+
+    ev = dict(cfg.get("eval") or {}) if isinstance(cfg.get("eval"), dict) else {}
+    if cli_fast_vqa:
+        ev["fast_vqa"] = True
+    if cli_root is not None:
+        ev["fast_vqa_root"] = cli_root
+    if cli_model is not None:
+        ev["fast_vqa_model"] = cli_model
+    if cli_device is not None:
+        ev["fast_vqa_device"] = cli_device
+    if cli_fps is not None:
+        ev["fast_vqa_fps"] = cli_fps
+    if cli_python is not None:
+        ev["fast_vqa_python"] = cli_python
+
+    root_p = resolve_fast_vqa_root(
+        repo_root=repo_root,
+        raw_root=ev.get("fast_vqa_root", ""),
+    )
+
+    py_raw = str(ev.get("fast_vqa_python", "") or "").strip() or os.environ.get("FAST_VQA_PYTHON", "").strip()
+    return {
+        "fast_vqa": bool(ev.get("fast_vqa", False)),
+        "fast_vqa_root": root_p,
+        "fast_vqa_model": str(ev.get("fast_vqa_model", "FasterVQA") or "FasterVQA"),
+        "fast_vqa_device": str(ev.get("fast_vqa_device", "cuda") or "cuda"),
+        "fast_vqa_fps": float(ev.get("fast_vqa_fps", 24.0) or 24.0),
+        "fast_vqa_python": py_raw if py_raw else None,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Run multiple pipelines on the same task and aggregate metrics.",
@@ -206,24 +268,26 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["mask", "track", "inpaint", "eval"],
         help="Run only this stage (requires exactly one pipeline). Overrides YAML only_stage when set.",
     )
+    p.add_argument(
+        "--fast-vqa",
+        action="store_true",
+        default=False,
+        help="Run FastVQA/FasterVQA on pred_frames_dir (uses --fast-vqa-root, FAST_VQA_ROOT, or repo defaults).",
+    )
+    p.add_argument(
+        "--fast-vqa-root",
+        default=None,
+        help="Path to FAST-VQA-and-FasterVQA clone (contains vqa.py). Overrides YAML eval.fast_vqa_root.",
+    )
+    p.add_argument("--fast-vqa-model", default=None, help="Model name for vqa.py -m (default from YAML or FasterVQA).")
+    p.add_argument("--fast-vqa-device", default=None, help="Torch device for vqa.py -d (default cuda).")
+    p.add_argument("--fast-vqa-fps", type=float, default=None, help="FPS when muxing frames to MP4 for VQA.")
+    p.add_argument(
+        "--fast-vqa-python",
+        default=None,
+        help="Python executable for upstream vqa.py (overrides YAML / FAST_VQA_PYTHON).",
+    )
     return p
-
-
-def _collect_required_envs(ctx: CompareRunContext) -> List[str]:
-    """Conda env names required for the selected only_stage (or full pipeline)."""
-    req: List[str] = []
-    st = ctx.only_stage
-    for name in ctx.pipeline_ids:
-        spec = ctx.registry[name]
-        if st is None or st == "mask":
-            req.append(env_for(ctx.env_map, stage="mask", method=str(spec["mask"])))
-        if st is None or st == "track":
-            req.append(env_for(ctx.env_map, stage="track", method=str(spec["track"])))
-        if st is None or st == "inpaint":
-            req.append(env_for(ctx.env_map, stage="inpaint", method=str(spec["inpaint"])))
-        if st is None or st == "eval":
-            req.append(env_for(ctx.env_map, stage="eval", method="internal"))
-    return req
 
 
 def main() -> None:
@@ -276,6 +340,17 @@ def main() -> None:
     gt_mask_dir = ctx.gt_mask_dir
     gt_frames_dir = ctx.gt_frames_dir
     only = ctx.only_stage
+
+    fast_vqa_eval_kw = _eval_fast_vqa_kwargs(
+        ctx.cfg,
+        repo_root=repo_root,
+        cli_fast_vqa=bool(args.fast_vqa),
+        cli_root=args.fast_vqa_root,
+        cli_model=args.fast_vqa_model,
+        cli_device=args.fast_vqa_device,
+        cli_fps=args.fast_vqa_fps,
+        cli_python=args.fast_vqa_python,
+    )
 
     if env_policy != "force_single":
         _require_envs(conda_exe, _collect_required_envs(ctx))
@@ -381,11 +456,13 @@ def main() -> None:
                     source_frames_dir=frames_dir,
                     merge_gt_objects=True,
                     video_metric_impl="internal",
+                    **fast_vqa_eval_kw,
                 )
             )
             rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
             print(
-                f"[compare] done: {name} (only_stage=eval) mask_score={summary.get('mask_score')}"
+                f"[compare] done: {name} (only_stage=eval) mask_score={summary.get('mask_score')} "
+                f"fast_vqa={summary.get('fast_vqa_score')}"
             )
             continue
 
@@ -642,13 +719,15 @@ def main() -> None:
                 source_frames_dir=frames_dir,
                 merge_gt_objects=True,
                 video_metric_impl="internal",
+                **fast_vqa_eval_kw,
             )
         )
 
         rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
         print(
             f"[compare] done: {name} (mask_jm={summary.get('mask_jm')} mask_fm={summary.get('mask_fm')} "
-            f"mask_fr={summary.get('mask_fr')} mask_score={summary.get('mask_score')})"
+            f"mask_fr={summary.get('mask_fr')} mask_score={summary.get('mask_score')} "
+            f"fast_vqa={summary.get('fast_vqa_score')})"
         )
 
     rows.sort(key=lambda r: str(r.get("method", "")))

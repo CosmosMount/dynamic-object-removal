@@ -19,11 +19,11 @@ class Params:
     max_area_ratio: float = 0.80
     sam_points_per_side: int = 32
     no_download: bool = False
-    # Optional strategy (mirrors SAM3-style two-stage anchor + bidirectional fusion in vendor script).
+    # Overlap-anchor refinement (see vendor `xmem_masks.py`).
     bidirectional: bool = False
-    bidirectional_merge: str = "union"  # union|intersection
+    bidirectional_merge: str = "union"  # Deprecated; kept for YAML/CLI compatibility.
     two_stage_anchor_idx: str = "-1"  # "-1"|"auto"|non-negative int
-    two_stage_auto_samples: int = 7
+    two_stage_auto_samples: int = 7  # Deprecated for overlap-anchor auto (unused).
     two_stage_auto_max_fg_frac: float = 0.92
     two_stage_auto_min_fg_frac: float = 0.00008
     two_stage_auto_min_fg_pixels: int = 64

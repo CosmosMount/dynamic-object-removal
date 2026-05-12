@@ -34,33 +34,33 @@ def parse_args() -> argparse.Namespace:
         "--two_stage_anchor_idx",
         type=str,
         default="-1",
-        help="Two-stage SAM3: '-1' off; int = fixed anchor; 'auto' = sample stage1 masks along time, "
-        "drop near-full-frame and tiny speckles, then prefer smaller fg among survivors (ties -> later frame). "
-        "Merged output: idx<=anchor from stage2, idx>anchor from stage1.",
+        help="Overlap-anchor: '-1' off (single bidirectional propagate from init); 'auto' = pick keyframe by "
+        "max binary overlap of forward vs mirrored-reverse passes, intersect seed, then full bidirectional "
+        "re-track from anchor; int = fixed anchor index (same pipeline, skip overlap search).",
     )
     parser.add_argument(
         "--two_stage_auto_samples",
         type=int,
         default=7,
-        help="With auto anchor: evenly spaced candidates (clamped to 5–7 and T).",
+        help="Deprecated for overlap-anchor 'auto' (kept for CLI compatibility).",
     )
     parser.add_argument(
         "--two_stage_auto_max_fg_frac",
         type=float,
         default=0.92,
-        help="Auto anchor: ignore candidates whose stage1 fg covers more than this fraction of the frame (near full-screen).",
+        help="Deprecated for overlap-anchor 'auto' (kept for CLI compatibility).",
     )
     parser.add_argument(
         "--two_stage_auto_min_fg_frac",
         type=float,
         default=0.00008,
-        help="Auto anchor: ignore candidates with fg area below max(min_fg_pixels, min_fg_frac * frame_pixels).",
+        help="Deprecated for overlap-anchor 'auto' (kept for CLI compatibility).",
     )
     parser.add_argument(
         "--two_stage_auto_min_fg_pixels",
         type=int,
         default=64,
-        help="Auto anchor: minimum fg pixels (used with min_fg_frac).",
+        help="Deprecated for overlap-anchor 'auto' (kept for CLI compatibility).",
     )
     parser.add_argument(
         "--instance_stats_csv",
@@ -231,22 +231,89 @@ def pick_auto_anchor(
     return fallback_idx, rows
 
 
-def merge_prefix_stage2(
-    outputs1: Dict[int, Dict[int, np.ndarray]],
-    outputs2: Dict[int, Dict[int, np.ndarray]],
-    anchor: int,
-    num_frames: int,
-) -> Dict[int, Dict[int, np.ndarray]]:
-    """Frames idx<=anchor from stage2; idx>anchor from stage1 (avoids stage2 hurting later frames)."""
-    merged: Dict[int, Dict[int, np.ndarray]] = {}
-    for idx in range(num_frames):
-        if idx <= anchor:
-            src = outputs2 if idx in outputs2 else outputs1
-            merged[idx] = dict(src.get(idx, {}))
-        else:
-            src = outputs1 if idx in outputs1 else outputs2
-            merged[idx] = dict(src.get(idx, {}))
-    return merged
+def propagate_direction(
+    predictor,
+    video_dir: str,
+    frame_names: List[str],
+    init_mask_path: str,
+    score_thresh: float,
+    video_name: str,
+    reverse: bool,
+) -> Tuple[Dict[int, Dict[int, np.ndarray]], int, int, List[int]]:
+    """One fresh inference_state; propagate only forward (reverse=False) or only backward (reverse=True)."""
+    first_mask, object_ids, palette = load_mask(init_mask_path)
+    if len(object_ids) == 0:
+        raise RuntimeError(f"No foreground object in init mask: {init_mask_path}")
+
+    init_frame_name = os.path.splitext(os.path.basename(init_mask_path))[0]
+    if init_frame_name not in frame_names:
+        raise RuntimeError(
+            f"Init mask frame {init_frame_name}.png not found in video frames for {video_name}"
+        )
+    init_frame_idx = frame_names.index(init_frame_name)
+
+    print(
+        f"[sam3] {video_name}: direction init {init_frame_name} (idx={init_frame_idx}) "
+        f"reverse={reverse} path={init_mask_path}"
+    )
+
+    inference_state = predictor.init_state(video_path=video_dir, async_loading_frames=False)
+    video_h = int(inference_state["video_height"])
+    video_w = int(inference_state["video_width"])
+    if first_mask.shape != (video_h, video_w):
+        resized = Image.fromarray(first_mask, mode="L").resize((video_w, video_h), resample=Image.NEAREST)
+        first_mask = np.array(resized).astype(np.uint8)
+
+    for obj_id in object_ids:
+        obj_mask = torch.from_numpy(first_mask == obj_id)
+        predictor.add_new_mask(
+            inference_state=inference_state,
+            frame_idx=init_frame_idx,
+            obj_id=int(obj_id),
+            mask=obj_mask,
+        )
+
+    outputs: Dict[int, Dict[int, np.ndarray]] = {}
+    for out_frame_idx, out_obj_ids, _, out_video_res_masks, _ in predictor.propagate_in_video(
+        inference_state=inference_state,
+        start_frame_idx=init_frame_idx,
+        max_frame_num_to_track=len(frame_names),
+        reverse=reverse,
+        # add_new_mask stores the conditioning frame in temp outputs first; with a fresh
+        # inference_state we must always run preflight once before propagate_in_video,
+        # otherwise SAM3 sees no consolidated cond_frame_outputs and raises
+        # "No points are provided; please add points first".
+        propagate_preflight=True,
+    ):
+        per_obj: Dict[int, np.ndarray] = {}
+        for i, out_obj_id in enumerate(out_obj_ids):
+            per_obj[int(out_obj_id)] = (out_video_res_masks[i] > score_thresh).cpu().numpy()
+        outputs[int(out_frame_idx)] = per_obj
+
+    return outputs, video_h, video_w, palette
+
+
+def _intersection_anchor_seed_array(
+    per_fwd: Dict[int, np.ndarray],
+    per_rev: Dict[int, np.ndarray],
+    video_h: int,
+    video_w: int,
+) -> np.ndarray:
+    """Per-object-id bool intersection; empty -> forward indexed canvas (or reverse if forward empty)."""
+    if not per_fwd:
+        return _compose_canvas(per_rev, video_h, video_w) if per_rev else np.zeros((video_h, video_w), dtype=np.uint8)
+    canvas_fwd = _compose_canvas(per_fwd, video_h, video_w)
+    seed = np.zeros((video_h, video_w), dtype=np.uint8)
+    for oid in sorted(set(per_fwd.keys()) | set(per_rev.keys())):
+        a = per_fwd.get(oid)
+        b = per_rev.get(oid)
+        if a is None or b is None:
+            continue
+        inter = a.reshape(video_h, video_w) & b.reshape(video_h, video_w)
+        seed[inter] = np.uint8(oid)
+    if int((seed > 0).sum()) == 0:
+        return canvas_fwd
+    return seed
 
 
 def propagate_video(
@@ -383,11 +450,12 @@ def run_one_video(
 
     mode, anchor_req = _parse_two_stage_anchor(two_stage_anchor_spec)
     init_mask_path = resolve_init_mask_path(input_mask_dir, video_name)
-    outputs1, video_h, video_w, palette = propagate_video(
-        predictor, video_dir, frame_names, init_mask_path, score_thresh, video_name
-    )
+    t = len(frame_names)
 
     if mode == "off":
+        outputs1, video_h, video_w, palette = propagate_video(
+            predictor, video_dir, frame_names, init_mask_path, score_thresh, video_name
+        )
         save_outputs_to_dir(outputs1, frame_names, video_h, video_w, output_mask_dir, video_name, palette)
         if instance_stats_csv:
             write_instance_stats_csv(
@@ -395,65 +463,79 @@ def run_one_video(
             )
         return
 
-    if mode == "auto":
-        anchor, cand_rows = pick_auto_anchor(
-            outputs1,
-            frame_names,
-            video_h,
-            video_w,
-            two_stage_auto_samples,
-            two_stage_auto_max_fg_frac,
-            two_stage_auto_min_fg_frac,
-            two_stage_auto_min_fg_pixels,
-        )
+    out_fwd, video_h, video_w, palette = propagate_direction(
+        predictor, video_dir, frame_names, init_mask_path, score_thresh, video_name, reverse=False
+    )
+    last_idx = t - 1
+    per_last = out_fwd.get(last_idx, {})
+    if not per_last or _foreground_area(per_last, video_h, video_w) == 0:
         print(
-            f"[sam3] {video_name}: auto anchor idx={anchor} "
-            f"(candidates idx,pixels,frac,stripe,fill: "
-            f"{[(i, int(a), round(f, 4), st, round(fl, 3)) for i, a, f, st, fl in cand_rows]})"
+            f"[sam3] WARN: {video_name}: empty last-frame mask after forward probe; "
+            "saving forward-only outputs."
         )
-    else:
-        anchor = min(max(0, anchor_req), len(frame_names) - 1)
-        print(f"[sam3] {video_name}: two-stage fixed anchor idx={anchor} (requested={anchor_req})")
-
-    per_anchor = outputs1.get(anchor)
-    if not per_anchor:
-        print(f"[sam3] WARN: stage1 missing frame {anchor}; using stage1 only.")
-        save_outputs_to_dir(outputs1, frame_names, video_h, video_w, output_mask_dir, video_name, palette)
+        save_outputs_to_dir(out_fwd, frame_names, video_h, video_w, output_mask_dir, video_name, palette)
         if instance_stats_csv:
             write_instance_stats_csv(
-                outputs1, frame_names, video_h, video_w, instance_stats_csv, video_name
+                out_fwd, frame_names, video_h, video_w, instance_stats_csv, video_name
             )
         return
 
-    canvas_anchor = _compose_canvas(per_anchor, video_h, video_w)
-    if int((canvas_anchor > 0).sum()) == 0:
-        print(f"[sam3] WARN: stage1 mask empty at anchor {anchor}; using stage1 only.")
-        save_outputs_to_dir(outputs1, frame_names, video_h, video_w, output_mask_dir, video_name, palette)
-        if instance_stats_csv:
-            write_instance_stats_csv(
-                outputs1, frame_names, video_h, video_w, instance_stats_csv, video_name
-            )
-        return
-
-    tmp_root = tempfile.mkdtemp(prefix=f"sam3_two_stage_{video_name}_", dir=os.path.dirname(output_mask_dir))
+    tmp_root = tempfile.mkdtemp(prefix=f"sam3_overlap_anchor_{video_name}_", dir=os.path.dirname(output_mask_dir))
     try:
+        last_stem = frame_names[last_idx]
+        last_png = os.path.join(tmp_root, f"{last_stem}.png")
+        save_indexed_mask(last_png, _compose_canvas(per_last, video_h, video_w), palette)
+
+        out_rev, h2, w2, _pal2 = propagate_direction(
+            predictor, video_dir, frame_names, last_png, score_thresh, video_name, reverse=True
+        )
+        if h2 != video_h or w2 != video_w:
+            raise RuntimeError(f"Video size mismatch fwd {video_h}x{video_w} vs rev {h2}x{w2}")
+
+        if mode == "auto":
+            areas: List[int] = []
+            for i in range(t):
+                cf = _compose_canvas(out_fwd.get(i, {}), video_h, video_w)
+                cr = _compose_canvas(out_rev.get(i, {}), video_h, video_w)
+                areas.append(int(np.logical_and(cf > 0, cr > 0).sum()))
+            max_a = max(areas) if areas else 0
+            if max_a <= 0:
+                anchor = t // 2
+            else:
+                anchor = max(i for i, a in enumerate(areas) if a == max_a)
+            print(
+                f"[sam3] {video_name}: overlap-anchor auto idx={anchor} "
+                f"(max_overlap={max_a}; first_overlap={areas[0] if areas else 0})"
+            )
+        else:
+            anchor = min(max(0, anchor_req), t - 1)
+            print(f"[sam3] {video_name}: overlap-anchor fixed idx={anchor} (requested={anchor_req})")
+
+        per_f = out_fwd.get(anchor, {})
+        per_r = out_rev.get(anchor, {})
+        seed_arr = _intersection_anchor_seed_array(per_f, per_r, video_h, video_w)
+        if int((seed_arr > 0).sum()) == 0:
+            print(f"[sam3] WARN: {video_name}: empty intersection seed at anchor {anchor}; saving forward probe.")
+            save_outputs_to_dir(out_fwd, frame_names, video_h, video_w, output_mask_dir, video_name, palette)
+            if instance_stats_csv:
+                write_instance_stats_csv(
+                    out_fwd, frame_names, video_h, video_w, instance_stats_csv, video_name
+                )
+            return
+
         s2_input = os.path.join(tmp_root, video_name)
         os.makedirs(s2_input, exist_ok=True)
         anchor_name = frame_names[anchor]
-        stage2_init_path = os.path.join(s2_input, f"{anchor_name}.png")
-        save_indexed_mask(stage2_init_path, canvas_anchor, palette)
+        stage_init_path = os.path.join(s2_input, f"{anchor_name}.png")
+        save_indexed_mask(stage_init_path, seed_arr, palette)
 
-        outputs2, h2, w2, _pal2 = propagate_video(
-            predictor, video_dir, frame_names, stage2_init_path, score_thresh, video_name
+        final_out, fh, fw, _pal_f = propagate_video(
+            predictor, video_dir, frame_names, stage_init_path, score_thresh, video_name
         )
-        merged = merge_prefix_stage2(outputs1, outputs2, anchor, len(frame_names))
-        save_outputs_to_dir(merged, frame_names, h2, w2, output_mask_dir, video_name, palette)
+        save_outputs_to_dir(final_out, frame_names, fh, fw, output_mask_dir, video_name, palette)
         if instance_stats_csv:
-            write_instance_stats_csv(merged, frame_names, h2, w2, instance_stats_csv, video_name)
-        print(
-            f"[sam3] {video_name}: stage2 done (re-init {anchor_name}); "
-            f"saved merge: idx<={anchor} from stage2, idx>{anchor} from stage1."
-        )
+            write_instance_stats_csv(final_out, frame_names, fh, fw, instance_stats_csv, video_name)
+        print(f"[sam3] {video_name}: overlap-anchor final bidirectional pass from {anchor_name}.png done.")
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 

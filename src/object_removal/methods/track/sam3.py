@@ -8,8 +8,8 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Params:
     checkpoint: Path
-    two_stage_anchor_idx: str = "auto"  # "-1" | int | "auto"
-    two_stage_auto_samples: int = 7
+    two_stage_anchor_idx: str = "auto"  # "-1" | int | "auto" (overlap-anchor; see sam3_vos)
+    two_stage_auto_samples: int = 7  # deprecated, CLI compat
     two_stage_auto_max_fg_frac: float = 0.92
     two_stage_auto_min_fg_frac: float = 0.00008
     two_stage_auto_min_fg_pixels: int = 64
@@ -25,7 +25,7 @@ def run(
     out_binary_dir: Path,
     params: Params,
 ) -> dict:
-    """Run SAM3 VOS (legacy two-stage) via `object_removal.vendor.sam3_vos`."""
+    """Run SAM3 VOS (overlap-anchor when two_stage_anchor_idx != -1) via `object_removal.vendor.sam3_vos`."""
     from object_removal.vendor import sam3_vos as mod
 
     video_name = frames_dir.name

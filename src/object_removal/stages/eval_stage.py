@@ -29,6 +29,14 @@ class EvalInputs:
     gt_frames_dir: Path | None = None
     source_frames_dir: Path | None = None  # Original RGB frames used by bg-L1 and temporal metrics.
     video_metric_impl: str = "internal"  # retained for API compat; GT PSNR/SSIM no longer used
+    # Optional no-reference inpaint quality (FAST-VQA / FasterVQA via external repo clone).
+    fast_vqa: bool = False
+    fast_vqa_root: Path | None = None
+    fast_vqa_model: str = "FasterVQA"
+    fast_vqa_device: str = "cuda"
+    fast_vqa_fps: float = 24.0
+    # If set, runs upstream vqa.py with this interpreter (else FAST_VQA_PYTHON env, else sys.executable).
+    fast_vqa_python: str | None = None
 
 
 def _float_or_none(x: object) -> Optional[float]:
@@ -474,6 +482,10 @@ def write_zero_eval_summary(
         "gt_frames_dir": "",
         "source_frames_dir": "",
         "video_metric_impl": "deprecated_no_gt_video_metrics",
+        "fast_vqa_score": None,
+        "fast_vqa_source": skip_reason,
+        "fast_vqa_model": "",
+        "fast_vqa_fps": 0.0,
     }
     write_summary(output_dir, summary)
     return summary
@@ -536,6 +548,28 @@ def run_eval(inputs: EvalInputs, *, propainter_root: Path | None = None) -> dict
         lap_m, lap_n, lap_src = compute_laplacian_var_mean(pred_dir)
         br_m, br_n = compute_brisque_mean_optional(pred_dir)
 
+    fast_vqa_score: Optional[float] = None
+    fast_vqa_source = "disabled"
+    fast_vqa_model_used = ""
+    if inputs.fast_vqa and inputs.fast_vqa_root and pred_dir and pred_dir.is_dir():
+        from object_removal.metrics.fast_vqa import run_fast_vqa_on_frames_dir
+
+        fast_vqa_model_used = str(inputs.fast_vqa_model).strip() or "FasterVQA"
+        fast_vqa_score, fast_vqa_source = run_fast_vqa_on_frames_dir(
+            pred_dir,
+            fast_vqa_root=inputs.fast_vqa_root,
+            model=fast_vqa_model_used,
+            device=str(inputs.fast_vqa_device).strip() or "cuda",
+            fps=float(inputs.fast_vqa_fps),
+            python_exe=inputs.fast_vqa_python,
+        )
+        if fast_vqa_score is None:
+            print(f"[eval] fast_vqa skipped/failed: {fast_vqa_source}", flush=True)
+        else:
+            print(f"[eval] fast_vqa_score={fast_vqa_score:.5f} ({fast_vqa_model_used})", flush=True)
+    elif inputs.fast_vqa and not inputs.fast_vqa_root:
+        fast_vqa_source = "disabled_no_fast_vqa_root"
+
     summary: Dict[str, Any] = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "part_label": inputs.part_label,
@@ -576,6 +610,10 @@ def run_eval(inputs: EvalInputs, *, propainter_root: Path | None = None) -> dict
         "gt_frames_dir": str(inputs.gt_frames_dir) if inputs.gt_frames_dir else "",
         "source_frames_dir": str(src_dir) if src_dir else "",
         "video_metric_impl": inputs.video_metric_impl,
+        "fast_vqa_score": fast_vqa_score,
+        "fast_vqa_source": fast_vqa_source,
+        "fast_vqa_model": fast_vqa_model_used,
+        "fast_vqa_fps": float(inputs.fast_vqa_fps) if inputs.fast_vqa else 0.0,
     }
 
     write_summary(inputs.output_dir, summary)

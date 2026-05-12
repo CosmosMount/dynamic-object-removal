@@ -1,0 +1,10 @@
+decord
+einops
+numpy
+opencv-python
+PyYAML
+scikit-video
+timm
+torch
+torchvision
+tqdm
