@@ -541,6 +541,26 @@ def run_one_video(
 
 
 def main() -> None:
+    # ── deterministic CUDA ──────────────────────────────────────────
+    # Without these, floating-point non-determinism in cuDNN / CUDA
+    # kernels can cause the overlap-anchor auto selector to pick a
+    # different keyframe across runs, making SAM3 tracking results
+    # non-reproducible on the same input.
+    import random
+
+    import numpy as np
+    import torch
+
+    _SEED = 42
+    random.seed(_SEED)
+    np.random.seed(_SEED)
+    torch.manual_seed(_SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(_SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    # ─────────────────────────────────────────────────────────────────
+
     args = parse_args()
     repo_root = os.path.abspath(args.repo_root)
     _ensure_sam3_on_path(repo_root)

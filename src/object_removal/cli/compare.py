@@ -438,6 +438,22 @@ def _run_pipelines_for_task(
             raw_xmem = spec.get("xmem")
             xmem_opts = dict(raw_xmem) if isinstance(raw_xmem, dict) else None
 
+        vote_fusion_opts: Optional[Dict[str, Any]] = None
+        if track_method == "vote_fusion":
+            raw_vf = spec.get("vote_fusion")
+            vf = dict(raw_vf) if isinstance(raw_vf, dict) else {}
+            from_pips = vf.get("from_pipelines", [])
+            if len(from_pips) != 2:
+                raise ValueError(f"vote_fusion.from_pipelines must have exactly 2 pipeline ids, got {from_pips}")
+            mask_dir_a = runs_root / str(from_pips[0]) / "track" / "masks_binary"
+            mask_dir_b = runs_root / str(from_pips[1]) / "track" / "masks_binary"
+            vote_fusion_opts = {
+                "mask_dir_a": str(mask_dir_a),
+                "mask_dir_b": str(mask_dir_b),
+                "mode": str(vf.get("mode", "intersection")),
+                "area_ratio_threshold": float(vf.get("area_ratio_threshold", 2.0)),
+            }
+
         mask_env = env_for(env_map, stage="mask", method=mask_method)
         track_env = env_for(env_map, stage="track", method=track_method)
         inpaint_env = env_for(env_map, stage="inpaint", method=inpaint_method)
@@ -515,6 +531,7 @@ def _run_pipelines_for_task(
                         overwrite=overwrite,
                         sam3_options=sam3_opts if track_method == "sam3" else None,
                         xmem_options=xmem_opts if track_method == "xmem" else None,
+                        vote_fusion_options=vote_fusion_opts if track_method == "vote_fusion" else None,
                         repo_root=repo_root,
                     )
             else:
@@ -632,6 +649,17 @@ def _run_pipelines_for_task(
                         ]
                     if track_method == "xmem" and xmem_opts:
                         track_argv += xmem_argv_from_opts(xmem_opts)
+                    if track_method == "vote_fusion" and vote_fusion_opts:
+                        track_argv += [
+                            "--vote-fusion-mask-dir-a",
+                            str(vote_fusion_opts["mask_dir_a"]),
+                            "--vote-fusion-mask-dir-b",
+                            str(vote_fusion_opts["mask_dir_b"]),
+                            "--vote-fusion-mode",
+                            str(vote_fusion_opts["mode"]),
+                            "--vote-fusion-area-ratio-threshold",
+                            str(vote_fusion_opts["area_ratio_threshold"]),
+                        ]
                     _run_stage_via_conda_run(
                         conda_exe=conda_exe,
                         env_name=track_env,
@@ -648,6 +676,7 @@ def _run_pipelines_for_task(
                         overwrite=overwrite,
                         sam3_options=sam3_opts if track_method == "sam3" else None,
                         xmem_options=xmem_opts if track_method == "xmem" else None,
+                        vote_fusion_options=vote_fusion_opts if track_method == "vote_fusion" else None,
                         repo_root=repo_root,
                     )
                 track_masks_dir = layout.track_masks_binary_dir

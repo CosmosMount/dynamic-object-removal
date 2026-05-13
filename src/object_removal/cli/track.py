@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run_dir", required=True)
     p.add_argument("--frames_dir", required=True)
     p.add_argument("--in_masks_dir", required=True)
-    p.add_argument("--method", required=True, choices=["identity", "sam3", "optflow", "xmem"])
+    p.add_argument("--method", required=True, choices=["identity", "sam3", "optflow", "xmem", "vote_fusion"])
     p.add_argument("--overwrite", action="store_true", default=False)
     p.add_argument("--repo_root", default=".", help="Repo root (required layout for sam3 ckpt paths).")
     p.add_argument("--sam3-checkpoint", default="ckpts/sam3/sam3.pt", help="Used when --method sam3")
@@ -93,6 +93,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.25,
         help="Per-object min overlap ratio for two-stage anchor seed validation.",
     )
+    p.add_argument("--vote-fusion-mask-dir-a", default=None, help="Used when --method vote_fusion")
+    p.add_argument("--vote-fusion-mask-dir-b", default=None, help="Used when --method vote_fusion")
+    p.add_argument(
+        "--vote-fusion-mode",
+        default="intersection",
+        choices=["intersection", "union"],
+        help="Used when --method vote_fusion",
+    )
+    p.add_argument(
+        "--vote-fusion-area-ratio-threshold",
+        type=float,
+        default=2.0,
+        help="Used when --method vote_fusion: if xmem/sam3 area ratio > this, trust xmem.",
+    )
     return p
 
 
@@ -121,6 +135,14 @@ def main() -> None:
             "two_stage_auto_min_fg_pixels": int(args.xmem_two_stage_auto_min_fg_pixels),
             "two_stage_min_overlap_ratio": float(args.xmem_two_stage_min_overlap_ratio),
         }
+    vote_fusion_options = None
+    if args.method == "vote_fusion":
+        vote_fusion_options = {
+            "mask_dir_a": str(args.vote_fusion_mask_dir_a),
+            "mask_dir_b": str(args.vote_fusion_mask_dir_b),
+            "mode": str(args.vote_fusion_mode),
+            "area_ratio_threshold": float(args.vote_fusion_area_ratio_threshold),
+        }
     out_dir = run_track_stage(
         run_dir=Path(args.run_dir),
         frames_dir=Path(args.frames_dir),
@@ -129,6 +151,7 @@ def main() -> None:
         overwrite=bool(args.overwrite),
         sam3_options=sam3_options,
         xmem_options=xmem_options,
+        vote_fusion_options=vote_fusion_options,
         repo_root=Path(args.repo_root).resolve(),
     )
     print(f"track_masks_dir={out_dir}")

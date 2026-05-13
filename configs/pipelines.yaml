@@ -102,6 +102,9 @@ parameters:
     bidirectional_vote_threshold: 0.3
     two_stage_anchor_idx: auto
     two_stage_min_overlap_ratio: 0.4
+  vote_fusion:
+    mode: intersection
+    area_ratio_threshold: 1.5
 
 pipelines:
   # Lightweight baseline: motion mask -> identity track -> handcrafted fill.
@@ -124,23 +127,16 @@ pipelines:
   yolo_xmem:
     mask: yolo_first
     track: xmem
-    inpaint: propainter
-
-  # VGGT-based variants.
-  vggt4d_xmem:
-    mask: vggt4d
-    track: xmem
-    inpaint: propainter
-
-  vggt4d_xmem_diffueraser:
-    share_mask_track_from: vggt4d_xmem
-    mask: vggt4d
-    track: xmem
-    inpaint: diffueraser
+    inpaint: propainter  
 
   vggt4d:
     mask: vggt_framewise
     track: identity
+    inpaint: propainter
+
+  vggt4d_xmem:
+    mask: vggt4d
+    track: xmem
     inpaint: propainter
 
   vggt4d_sam3:
@@ -148,8 +144,19 @@ pipelines:
     track: sam3
     inpaint: propainter
 
-  vggt4d_sam3_diffueraser:
-    share_mask_track_from: vggt4d_sam3
+  # Mask fusion: vote between xmem and sam3 tracked masks (run after vggt4d_xmem + vggt4d_sam3).
+  vggt4d_xmem_sam3_vote:
     mask: vggt4d
-    track: sam3
+    track: vote_fusion
+    inpaint: propainter
+    vote_fusion:
+      from_pipelines: [vggt4d_xmem, vggt4d_sam3]
+      mode: intersection
+
+  vggt4d_xmem_sam3_vote_diffueraser:
+    mask: vggt4d
+    track: vote_fusion
     inpaint: diffueraser
+    vote_fusion:
+      from_pipelines: [vggt4d_xmem, vggt4d_sam3]
+      mode: intersection

@@ -11,8 +11,8 @@
 # - `davis_root` is resolved relative to the repository root when not absolute.
 # - Omit `out_root` to use the default `outputs/compare/<SEQ>`.
 
-# task: davis:[bear,bmx-trees,gold-fish,cat-girl,scooter-board,kite-surf,tennis,hockey]
-task: davis:scooter-board
+task: davis:[bear,bmx-trees,gold-fish,cat-girl,scooter-board,kite-surf,tennis,hockey]
+# task: davis:gold-fish
 davis_root: data/DAVIS
 # out_root: outputs/compare/cat-girl
 
@@ -24,13 +24,14 @@ davis_root: data/DAVIS
 # - For `only_stage: eval`, multiple pipeline ids are allowed and only existing artifacts are read.
 
 pipelines_config: configs/pipelines.yaml
-pipelines:
-  # - yolo_xmem
-  # - yolo_sam3
-  - vggt4d_xmem
-  # - vggt4d_sam3
-  # - vggt4d_sam3_diffueraser
-# run_all_pipelines: true
+# pipelines:
+#   - yolo_xmem
+#   - yolo_sam3
+#   - vggt4d_xmem
+  # - vggt4d_xmem_sam3_vote
+#   - vggt4d_sam3
+#   - vggt4d_sam3_diffueraser
+run_all_pipelines: true
 # only_stage: eval
 
 # Output behavior:

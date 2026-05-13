@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
 from object_removal.methods.track import identity
-from object_removal.methods.track import optflow, sam3, xmem
+from object_removal.methods.track import optflow, sam3, vote_fusion, xmem
 
 
 def run_track_stage(
@@ -19,6 +19,7 @@ def run_track_stage(
     overwrite: bool = False,
     sam3_options: Optional[Dict[str, Any]] = None,
     xmem_options: Optional[Dict[str, Any]] = None,
+    vote_fusion_options: Optional[Dict[str, Any]] = None,
     repo_root: Optional[Path] = None,
 ) -> Path:
     """@brief Run the track stage and normalize outputs into binary mask PNGs.
@@ -99,6 +100,26 @@ def run_track_stage(
             init_mask_path=init_mask,
             out_masks_dir=out_dir,
             params=optflow.Params(yolo_model=Path("ckpts/yolo/yolov8n-seg.pt")),
+        )
+        write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
+        return out_dir
+
+    if method == "vote_fusion":
+        vf = vote_fusion_options or {}
+        mask_dir_a = Path(vf["mask_dir_a"])
+        mask_dir_b = Path(vf["mask_dir_b"])
+        if not mask_dir_a.is_absolute():
+            mask_dir_a = (root / mask_dir_a).resolve()
+        if not mask_dir_b.is_absolute():
+            mask_dir_b = (root / mask_dir_b).resolve()
+        meta = vote_fusion.run(
+            mask_dir_a=mask_dir_a,
+            mask_dir_b=mask_dir_b,
+            out_masks_dir=out_dir,
+            params=vote_fusion.Params(
+                mode=str(vf.get("mode", "intersection")),
+                area_ratio_threshold=float(vf.get("area_ratio_threshold", 2.0)),
+            ),
         )
         write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
         return out_dir
