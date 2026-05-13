@@ -135,7 +135,7 @@ def run_fast_vqa_on_frames_dir(
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         if proc.returncode != 0:
             tail = out.strip()[-800:]
-            # CUDA stack (torch/decord) sometimes segfaults in the eval driver env (e.g. sam2).
+            # CUDA stack (torch/decord) sometimes segfaults in the eval driver env.
             if dev.lower() == "cuda" and proc.returncode is not None and proc.returncode < 0:
                 print(
                     f"[eval] fast_vqa: subprocess died on cuda (rc={proc.returncode}); "

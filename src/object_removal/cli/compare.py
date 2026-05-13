@@ -50,7 +50,7 @@ def _fmt(v: Any) -> str:
 
 def _track_uses_init_masks_dir(track_method: str) -> bool:
     """Track methods that read init masks from mask/init/masks (not e.g. xmem's own init)."""
-    return track_method in ("sam2", "sam3", "optflow", "identity", "xmem")
+    return track_method in ("sam3", "optflow", "identity", "xmem")
 
 
 def _load_metrics_row(path: Path, method_name: str) -> Dict[str, Any]:
@@ -803,29 +803,6 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    cfg = ctx.cfg
-    task = ctx.task
-    davis_root = ctx.davis_root
-    pipelines_config_path = ctx.pipelines_config_path
-    env_map = ctx.env_map
-    conda_exe = ctx.conda_exe
-    env_policy = ctx.env_policy
-    overwrite = ctx.overwrite
-    part_label = ctx.part_label
-    export_mask_vis = ctx.export_mask_vis
-    mask_vis_fps = ctx.mask_vis_fps
-    mask_vis_alpha = ctx.mask_vis_alpha
-    registry = ctx.registry
-    pipeline_ids = ctx.pipeline_ids
-    out_root = ctx.out_root
-    runs_root = ctx.runs_root
-    summary_root = ctx.summary_root
-    meta_root = ctx.meta_root
-    frames_dir = ctx.frames_dir
-    gt_mask_dir = ctx.gt_mask_dir
-    gt_frames_dir = ctx.gt_frames_dir
-    only = ctx.only_stage
-
     fast_vqa_eval_kw = _eval_fast_vqa_kwargs(
         ctx.cfg,
         repo_root=repo_root,
@@ -837,423 +814,45 @@ def main() -> None:
         cli_python=args.fast_vqa_python,
     )
 
-    if env_policy != "force_single":
-        _require_envs(conda_exe, _collect_required_envs(ctx))
+    if ctx.env_policy != "force_single":
+        _require_envs(ctx.conda_exe, _collect_required_envs(ctx))
 
-    meta_root.mkdir(parents=True, exist_ok=True)
-    seq = task.split(":", 1)[1]
-    task_meta = {"type": "davis", "seq": seq, "davis_root": str(davis_root)}
-    (meta_root / "task.json").write_text(json.dumps(task_meta, indent=2), encoding="utf-8")
-    (meta_root / "compare_run.json").write_text(
-        json.dumps(
-            {
-                "compare_config": str(compare_cfg_path),
-                "compare_config_loaded": compare_cfg_path.is_file(),
-                "task": task,
-                "davis_root": str(davis_root),
-                "pipelines_config": str(pipelines_config_path),
-                "pipeline_ids": pipeline_ids,
-                "out_root": str(out_root),
-                "overwrite": overwrite,
-                "part_label": part_label,
-                "conda_exe": conda_exe,
-                "env_map": str(ctx.env_map_path),
-                "env_policy": env_policy,
-                "only_stage": only,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    (meta_root / "pipelines.json").write_text(
-        json.dumps(
-            {
-                "pipelines_config": str(pipelines_config_path),
-                "pipeline_ids": pipeline_ids,
-                "selected_specs": {k: registry[k] for k in pipeline_ids},
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    # Expand tasks: davis:SEQ, davis:[s1,s2,...], or davis:all
+    seqs = expand_davis_tasks(ctx.task, ctx.davis_root)
 
-    rows: List[Dict[str, Any]] = []
-
-    for name in pipeline_ids:
-        spec = registry[name]
-
-        run_dir = runs_root / name
-        layout = RunLayout(run_dir)
-        ensure_layout_dirs(layout)
-
-        # -- share_mask_track_from: symlink mask/track from base pipeline -----------------
-        share_raw = spec.get("share_mask_track_from")
-        share_base: Optional[str] = (
-            str(share_raw).strip() if isinstance(share_raw, str) and share_raw.strip() else None
-        )
-
-        if share_base and only in ("mask", "track"):
-            print(f"[compare] skip {name}: share_mask_track_from={share_base} (only_stage={only})")
-            continue
-
-        if share_base:
-            base_run_dir = runs_root / share_base
-            base_layout = RunLayout(base_run_dir)
-            for link_dir, base_dir in [
-                (layout.mask_dir, base_layout.mask_dir),
-                (layout.track_dir, base_layout.track_dir),
-            ]:
-                if link_dir.is_symlink():
-                    link_dir.unlink()
-                elif link_dir.exists():
-                    shutil.rmtree(str(link_dir))
-                rel_target = os.path.relpath(str(base_dir), str(link_dir.parent))
-                link_dir.symlink_to(rel_target, target_is_directory=True)
-            print(f"[compare] {name}: symlinked mask/ and track/ from {share_base}")
-
-        # Stages
-        mask_method = str(spec["mask"])
-        track_method = str(spec["track"])
-        inpaint_method = str(spec["inpaint"])
-        vggt4d_opts = spec.get("vggt4d") if mask_method == "vggt4d" and isinstance(spec.get("vggt4d"), dict) else None
-        if mask_method == "vggt_framewise" and isinstance(spec.get("vggt4d"), dict):
-            vggt4d_opts = spec.get("vggt4d")
-        if inpaint_method == "diffueraser":
-            raw_de = spec.get("diffueraser")
-            diffueraser_opts = dict(raw_de) if isinstance(raw_de, dict) else {}
-        else:
-            diffueraser_opts = None
-        propainter_opts = (
-            spec.get("propainter") if inpaint_method == "propainter" and isinstance(spec.get("propainter"), dict) else None
-        )
-        sam3_opts: Optional[Dict[str, Any]] = None
-        if track_method == "sam3":
-            base_s3 = {
-                "checkpoint": "ckpts/sam3/sam3.pt",
-                "two_stage_anchor_idx": "auto",
-                "two_stage_auto_samples": 7,
-                "two_stage_auto_max_fg_frac": 0.92,
-                "two_stage_auto_min_fg_frac": 0.00008,
-                "two_stage_auto_min_fg_pixels": 64,
-                "score_thresh": 0.0,
-            }
-            raw_s3 = spec.get("sam3")
-            if isinstance(raw_s3, dict):
-                base_s3.update(raw_s3)
-            sam3_opts = base_s3
-
-        xmem_opts: Optional[Dict[str, Any]] = None
-        if track_method == "xmem":
-            raw_xmem = spec.get("xmem")
-            xmem_opts = dict(raw_xmem) if isinstance(raw_xmem, dict) else None
-
-        mask_env = env_for(env_map, stage="mask", method=mask_method)
-        track_env = env_for(env_map, stage="track", method=track_method)
-        inpaint_env = env_for(env_map, stage="inpaint", method=inpaint_method)
-
-        if only == "eval":
-            track_masks_dir = layout.track_masks_binary_dir
-            inpaint_frames_dir = layout.inpaint_frames_dir
-            summary = run_eval(
-                EvalInputs(
-                    output_dir=layout.eval_dir,
-                    part_label=part_label,
-                    experiment_name=name,
-                    pred_mask_dir=track_masks_dir,
-                    gt_mask_dir=gt_mask_dir,
-                    pred_frames_dir=inpaint_frames_dir,
-                    gt_frames_dir=None,
-                    source_frames_dir=frames_dir,
-                    merge_gt_objects=True,
-                    video_metric_impl="internal",
-                    **fast_vqa_eval_kw,
-                )
+    if len(seqs) == 1:
+        # Single sequence — existing behavior.
+        _run_pipelines_for_task(ctx, fast_vqa_eval_kw)
+    else:
+        # Batch mode: run per sequence, compute cross-sequence averages.
+        seq_rows_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for i, seq in enumerate(seqs):
+            seq_frames_dir, seq_gt_mask_dir = resolve_davis_paths(ctx.davis_root, seq)
+            seq_out_root = ctx.out_root / seq
+            seq_ctx = replace(
+                ctx,
+                task=f"davis:{seq}",
+                frames_dir=seq_frames_dir,
+                gt_mask_dir=seq_gt_mask_dir,
+                gt_frames_dir=seq_frames_dir,
+                out_root=seq_out_root,
+                runs_root=seq_out_root / "runs",
+                summary_root=seq_out_root / "summary",
+                meta_root=seq_out_root / "meta",
             )
-            rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-            print(
-                f"[compare] done: {name} (only_stage=eval) mask_score={summary.get('mask_score')} "
-                f"fast_vqa={summary.get('fast_vqa_score')}"
-            )
-            continue
+            print(f"\n[compare] === batch [{i + 1}/{len(seqs)}]: {seq} ===")
+            rows = _run_pipelines_for_task(seq_ctx, fast_vqa_eval_kw)
+            for row in rows:
+                seq_rows_map[str(row.get("method", ""))].append(row)
 
-        if env_policy == "force_single":
-            if only is None or only == "mask":
-                if share_base:
-                    init_masks_dir = layout.mask_init_masks_dir
-                else:
-                    init_masks_dir = run_mask_stage(
-                        run_dir=run_dir,
-                        frames_dir=frames_dir,
-                        method=mask_method,
-                        overwrite=overwrite,
-                        vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
-                        repo_root=repo_root,
-                    )
-            else:
-                init_masks_dir = layout.mask_init_masks_dir
-
-            if only == "mask":
-                print(f"[compare] only_stage=mask done: {name}")
-                continue
-
-            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
-                frames_dir, init_masks_dir, track_method
-            ):
-                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
-                summary = write_zero_eval_summary(
-                    layout.eval_dir,
-                    experiment_name=name,
-                    part_label=part_label,
-                )
-                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-                print(
-                    f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} "
-                    f"mask_score={summary.get('mask_score')}"
-                )
-                continue
-
-            if only is None or only == "track":
-                if share_base:
-                    track_masks_dir = layout.track_masks_binary_dir
-                else:
-                    track_masks_dir = run_track_stage(
-                        run_dir=run_dir,
-                        frames_dir=frames_dir,
-                        in_masks_dir=init_masks_dir,
-                        method=track_method,
-                        overwrite=overwrite,
-                        sam3_options=sam3_opts if track_method == "sam3" else None,
-                        xmem_options=xmem_opts if track_method == "xmem" else None,
-                        repo_root=repo_root,
-                    )
-            else:
-                track_masks_dir = layout.track_masks_binary_dir
-
-            if only == "track":
-                print(f"[compare] only_stage=track done: {name}")
-                continue
-
-            if only is None or only == "inpaint":
-                inpaint_frames_dir = run_inpaint_stage(
-                    run_dir=run_dir,
-                    frames_dir=frames_dir,
-                    masks_dir=track_masks_dir,
-                    method=inpaint_method,
-                    overwrite=overwrite,
-                    diffueraser_options=diffueraser_opts,
-                    propainter_options=propainter_opts,
-                )
-            else:
-                inpaint_frames_dir = layout.inpaint_frames_dir
-
-            if only == "inpaint":
-                print(f"[compare] only_stage=inpaint done: {name}")
-                continue
-        else:
-            if only is None or only == "mask":
-                if share_base:
-                    pass  # symlink already provides mask/ data
-                elif mask_env:
-                    mask_argv = [
-                        "--run_dir",
-                        str(run_dir),
-                        "--frames_dir",
-                        str(frames_dir),
-                        "--method",
-                        mask_method,
-                        "--repo_root",
-                        str(repo_root),
-                        *([] if not overwrite else ["--overwrite"]),
-                    ]
-                    if vggt4d_opts:
-                        mask_argv += mask_argv_from_vggt_opts(vggt4d_opts, mask_method=mask_method)
-                    _run_stage_via_conda_run(
-                        conda_exe=conda_exe,
-                        env_name=mask_env,
-                        module="object_removal.cli.mask",
-                        argv=mask_argv,
-                        cwd=repo_root,
-                    )
-                else:
-                    run_mask_stage(
-                        run_dir=run_dir,
-                        frames_dir=frames_dir,
-                        method=mask_method,
-                        overwrite=overwrite,
-                        vggt4d_options=vggt4d_opts if mask_method in ("vggt4d", "vggt_framewise") else None,
-                        repo_root=repo_root,
-                    )
-            init_masks_dir = layout.mask_init_masks_dir
-
-            if only == "mask":
-                print(f"[compare] only_stage=mask done: {name}")
-                continue
-
-            if _track_uses_init_masks_dir(track_method) and not init_masks_sufficient_for_track(
-                frames_dir, init_masks_dir, track_method
-            ):
-                print(f"[compare] skip track/inpaint: no init mask on first frame ({name})")
-                summary = write_zero_eval_summary(
-                    layout.eval_dir,
-                    experiment_name=name,
-                    part_label=part_label,
-                )
-                rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-                print(
-                    f"[compare] done: {name} (skipped, zeros) mask_jm={summary.get('mask_jm')} "
-                    f"mask_score={summary.get('mask_score')}"
-                )
-                continue
-
-            if only is None or only == "track":
-                if share_base:
-                    pass  # symlink already provides track/ data
-                elif track_env:
-                    track_argv = [
-                        "--run_dir",
-                        str(run_dir),
-                        "--frames_dir",
-                        str(frames_dir),
-                        "--in_masks_dir",
-                        str(init_masks_dir),
-                        "--method",
-                        track_method,
-                        "--repo_root",
-                        str(repo_root),
-                        *([] if not overwrite else ["--overwrite"]),
-                    ]
-                    if track_method == "sam3" and sam3_opts:
-                        track_argv += [
-                            "--sam3-checkpoint",
-                            str(sam3_opts.get("checkpoint", "ckpts/sam3/sam3.pt")),
-                            "--sam3-two-stage-anchor-idx",
-                            str(sam3_opts.get("two_stage_anchor_idx", "auto")),
-                            "--sam3-two-stage-auto-samples",
-                            str(int(sam3_opts.get("two_stage_auto_samples", 7))),
-                            "--sam3-two-stage-auto-max-fg-frac",
-                            str(float(sam3_opts.get("two_stage_auto_max_fg_frac", 0.92))),
-                            "--sam3-two-stage-auto-min-fg-frac",
-                            str(float(sam3_opts.get("two_stage_auto_min_fg_frac", 0.00008))),
-                            "--sam3-two-stage-auto-min-fg-pixels",
-                            str(int(sam3_opts.get("two_stage_auto_min_fg_pixels", 64))),
-                            "--sam3-score-thresh",
-                            str(float(sam3_opts.get("score_thresh", 0.0))),
-                        ]
-                    if track_method == "xmem" and xmem_opts:
-                        track_argv += xmem_argv_from_opts(xmem_opts)
-                    _run_stage_via_conda_run(
-                        conda_exe=conda_exe,
-                        env_name=track_env,
-                        module="object_removal.cli.track",
-                        argv=track_argv,
-                        cwd=repo_root,
-                    )
-                else:
-                    run_track_stage(
-                        run_dir=run_dir,
-                        frames_dir=frames_dir,
-                        in_masks_dir=init_masks_dir,
-                        method=track_method,
-                        overwrite=overwrite,
-                        sam3_options=sam3_opts if track_method == "sam3" else None,
-                        xmem_options=xmem_opts if track_method == "xmem" else None,
-                        repo_root=repo_root,
-                    )
-                track_masks_dir = layout.track_masks_binary_dir
-            else:
-                track_masks_dir = layout.track_masks_binary_dir
-
-            if only == "track":
-                print(f"[compare] only_stage=track done: {name}")
-                continue
-
-            if only is None or only == "inpaint":
-                if inpaint_env:
-                    inpaint_argv = [
-                        "--run_dir",
-                        str(run_dir),
-                        "--frames_dir",
-                        str(frames_dir),
-                        "--masks_dir",
-                        str(track_masks_dir),
-                        "--method",
-                        inpaint_method,
-                        *([] if not overwrite else ["--overwrite"]),
-                    ]
-                    if inpaint_method == "diffueraser":
-                        inpaint_argv += inpaint_argv_from_diffueraser_opts(diffueraser_opts)
-                    if propainter_opts:
-                        inpaint_argv += inpaint_argv_from_propainter_opts(propainter_opts)
-                    _run_stage_via_conda_run(
-                        conda_exe=conda_exe,
-                        env_name=inpaint_env,
-                        module="object_removal.cli.inpaint",
-                        argv=inpaint_argv,
-                        cwd=repo_root,
-                    )
-                else:
-                    run_inpaint_stage(
-                        run_dir=run_dir,
-                        frames_dir=frames_dir,
-                        masks_dir=track_masks_dir,
-                        method=inpaint_method,
-                        overwrite=overwrite,
-                        diffueraser_options=diffueraser_opts,
-                        propainter_options=propainter_opts,
-                    )
-                inpaint_frames_dir = layout.inpaint_frames_dir
-            else:
-                inpaint_frames_dir = layout.inpaint_frames_dir
-
-            if only == "inpaint":
-                print(f"[compare] only_stage=inpaint done: {name}")
-                continue
-
-        if export_mask_vis and only is None:
-            vis_path = layout.track_mask_vis_mp4
-            n_masks = len(list(track_masks_dir.glob("*.png")))
-            if n_masks > 0:
-                if export_mask_overlay_video(
-                    frames_dir,
-                    track_masks_dir,
-                    vis_path,
-                    fps=mask_vis_fps,
-                    alpha=mask_vis_alpha,
-                ):
-                    print(f"[compare] mask_vis: {vis_path}")
-                else:
-                    print(f"[compare] mask_vis: failed ({vis_path})")
-            else:
-                print(f"[compare] mask_vis: skipped (no PNG under {track_masks_dir})")
-
-        # Eval (full pipeline)
-        summary = run_eval(
-            EvalInputs(
-                output_dir=layout.eval_dir,
-                part_label=part_label,
-                experiment_name=name,
-                pred_mask_dir=track_masks_dir,
-                gt_mask_dir=gt_mask_dir,
-                pred_frames_dir=inpaint_frames_dir,
-                gt_frames_dir=None,
-                source_frames_dir=frames_dir,
-                merge_gt_objects=True,
-                video_metric_impl="internal",
-                **fast_vqa_eval_kw,
-            )
-        )
-
-        rows.append(_load_metrics_row(layout.eval_metrics_json, method_name=name))
-        print(
-            f"[compare] done: {name} (mask_jm={summary.get('mask_jm')} mask_fm={summary.get('mask_fm')} "
-            f"mask_fr={summary.get('mask_fr')} mask_score={summary.get('mask_score')} "
-            f"fast_vqa={summary.get('fast_vqa_score')})"
-        )
-
-    rows.sort(key=lambda r: str(r.get("method", "")))
-    _write_combined(rows, summary_root / "combined.csv", summary_root / "combined.md")
-    print(f"Wrote: {summary_root / 'combined.csv'}")
-    print(f"Wrote: {summary_root / 'combined.md'}")
+        # Cross-sequence average per pipeline.
+        avg_rows = _average_rows(seq_rows_map)
+        batch_summary = ctx.out_root / "summary"
+        batch_summary.mkdir(parents=True, exist_ok=True)
+        _write_combined(avg_rows, batch_summary / "combined_avg.csv", batch_summary / "combined_avg.md")
+        print(f"\n[compare] batch done ({len(seqs)} sequences).")
+        print(f"Wrote: {batch_summary / 'combined_avg.csv'}")
+        print(f"Wrote: {batch_summary / 'combined_avg.md'}")
 
 
 if __name__ == "__main__":

@@ -2,11 +2,10 @@
   "mask": {
     "vggt4d": "vggt",
     "vggt_framewise": "vggt",
-    "yolo_first": "sam2",
-    "baseline_yolo_motion": "sam2"
+    "yolo_first": "sam3",
+    "baseline_yolo_motion": "sam3"
   },
   "track": {
-    "sam2": "sam2",
     "sam3": "sam3",
     "xmem": "xmem",
     "identity": "",

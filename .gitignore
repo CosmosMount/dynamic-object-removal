@@ -14,3 +14,4 @@ TASK.md
 MEMORY.md
 *.egg-info/
 report/
+.claude/

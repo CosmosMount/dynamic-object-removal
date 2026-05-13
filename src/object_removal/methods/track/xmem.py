@@ -11,7 +11,8 @@ class Params:
     no_download: bool = False
     # Two-stage merge + bidirectional fusion.
     bidirectional: bool = False
-    bidirectional_merge: str = "union"  # union|intersection (bidirectional fusion mode)
+    bidirectional_merge: str = "union"  # union|intersection|vote (bidirectional fusion mode)
+    bidirectional_vote_threshold: float = 0.3  # min overlap with intersection for union components
     two_stage_anchor_idx: str = "-1"  # "-1"|"auto"|non-negative int
     two_stage_auto_samples: int = 7  # Deprecated (max-overlap anchor selection ignores this).
     two_stage_auto_max_fg_frac: float = 0.92
@@ -76,6 +77,7 @@ def run(
     if params.bidirectional:
         argv.append("--xmem-bidirectional")
     argv += ["--xmem-bidirectional-merge", str(params.bidirectional_merge)]
+    argv += ["--xmem-bidirectional-vote-threshold", str(float(params.bidirectional_vote_threshold))]
     argv += [
         "--xmem-two-stage-anchor-idx",
         str(params.two_stage_anchor_idx),

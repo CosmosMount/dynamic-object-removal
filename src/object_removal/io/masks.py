@@ -42,7 +42,7 @@ def to_binary_255(mask_u8: np.ndarray) -> np.ndarray:
 
 
 def sorted_video_frame_stems(frames_dir: Path) -> List[str]:
-    """Stem names of RGB frames, ordered like SAM2 VOS (integer stems when possible)."""
+    """Stem names of RGB frames, ordered like VOS (integer stems when possible)."""
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
     def sort_key(p: Path):
@@ -106,9 +106,9 @@ def write_eroded_binary_mask_pngs(*, src_dir: Path, dst_dir: Path, iterations: i
 
 
 def init_masks_sufficient_for_track(frames_dir: Path, init_masks_dir: Path, track_method: str) -> bool:
-    """Whether init masks are non-empty for this tracker (SAM2/optflow need frame 0; SAM3/identity allow any frame index)."""
+    """Whether init masks are non-empty for this tracker (optflow needs frame 0; SAM3/identity allow any frame index)."""
     tm = (track_method or "").strip().lower()
-    if tm in ("sam2", "optflow"):
+    if tm in ("optflow",):
         return init_mask_nonempty_on_first_frame(frames_dir, init_masks_dir)
     if tm in ("sam3", "identity", "xmem"):
         return init_masks_dir_has_any_foreground_png(init_masks_dir)

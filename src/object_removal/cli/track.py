@@ -11,9 +11,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run_dir", required=True)
     p.add_argument("--frames_dir", required=True)
     p.add_argument("--in_masks_dir", required=True)
-    p.add_argument("--method", required=True, choices=["identity", "sam2", "sam3", "optflow", "xmem"])
+    p.add_argument("--method", required=True, choices=["identity", "sam3", "optflow", "xmem"])
     p.add_argument("--overwrite", action="store_true", default=False)
-    p.add_argument("--repo_root", default=".", help="Repo root (required layout for sam3 / sam2 ckpt paths).")
+    p.add_argument("--repo_root", default=".", help="Repo root (required layout for sam3 ckpt paths).")
     p.add_argument("--sam3-checkpoint", default="ckpts/sam3/sam3.pt", help="Used when --method sam3")
     p.add_argument(
         "--sam3-two-stage-anchor-idx",
@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--xmem-bidirectional-merge",
         type=str,
         default="union",
-        choices=["union", "intersection"],
+        choices=["union", "intersection", "vote"],
         help="Used when --method xmem (deprecated; ignored).",
     )
     p.add_argument(

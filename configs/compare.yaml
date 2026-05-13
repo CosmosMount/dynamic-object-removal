@@ -2,10 +2,16 @@
 # Any CLI flag may override the matching YAML field.
 #
 # Task input:
-# - `task` is required. Current runner supports `davis:SEQ`.
+# - `task` is required. Supports:
+#     davis:SEQ            single sequence
+#     davis:[s1,s2,...]    explicit list
+#     davis:all            all sequences under davis_root/JPEGImages/480p/
+#   Batch mode (list or all) writes per-seq results under out_root/<SEQ>/ and
+#   a cross-sequence average at out_root/summary/combined_avg.{csv,md}.
 # - `davis_root` is resolved relative to the repository root when not absolute.
 # - Omit `out_root` to use the default `outputs/compare/<SEQ>`.
 
+# task: davis:[bear,bmx-trees,gold-fish,cat-girl,scooter-board,kite-surf,tennis,hockey]
 task: davis:scooter-board
 davis_root: data/DAVIS
 # out_root: outputs/compare/cat-girl
@@ -20,10 +26,10 @@ davis_root: data/DAVIS
 pipelines_config: configs/pipelines.yaml
 pipelines:
   # - yolo_xmem
+  # - yolo_sam3
   - vggt4d_xmem
   # - vggt4d_sam3
-#   - vggt4d_sam3_diffueraser
-  # - vggt4d_sam3_propainter
+  # - vggt4d_sam3_diffueraser
 # run_all_pipelines: true
 # only_stage: eval
 

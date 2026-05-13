@@ -98,9 +98,10 @@ parameters:
     save_frames: true
   xmem:
     bidirectional: true
-    bidirectional_merge: union
+    bidirectional_merge: vote
+    bidirectional_vote_threshold: 0.3
     two_stage_anchor_idx: auto
-    two_stage_min_overlap_ratio: 0.6
+    two_stage_min_overlap_ratio: 0.4
 
 pipelines:
   # Lightweight baseline: motion mask -> identity track -> handcrafted fill.
@@ -110,9 +111,9 @@ pipelines:
     inpaint: baseline_handcrafted
 
   # YOLO init mask variants.
-  yolo_sam2:
+  yolo_sam3:
     mask: yolo_first
-    track: sam2
+    track: sam3
     inpaint: propainter
 
   yolo_opt:
@@ -131,15 +132,16 @@ pipelines:
     track: xmem
     inpaint: propainter
 
+  vggt4d_xmem_diffueraser:
+    share_mask_track_from: vggt4d_xmem
+    mask: vggt4d
+    track: xmem
+    inpaint: diffueraser
+
   vggt4d:
     mask: vggt_framewise
     track: identity
     inpaint: propainter
-
-  # vggt4d_diffueraser:
-  #   mask: vggt_framewise
-  #   track: identity
-  #   inpaint: diffueraser
 
   vggt4d_sam3:
     mask: vggt4d

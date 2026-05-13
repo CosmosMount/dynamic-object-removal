@@ -35,7 +35,7 @@ def _try_yolo(frames: List[np.ndarray], dynamic_classes: List[int]) -> Tuple[Lis
         masks: List[np.ndarray] = []
 
         for i, frame in enumerate(frames):
-            result = model(frame, classes=dynamic_classes, verbose=False)[0]
+            result = model(frame, classes="all", verbose=False)[0]
             mask = np.zeros((height, width), dtype=np.uint8)
             if result.masks is not None:
                 for seg in result.masks.data:

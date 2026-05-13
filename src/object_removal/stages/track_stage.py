@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from object_removal.io.layout import RunLayout, ensure_layout_dirs
 from object_removal.io.manifest import write_method_manifest
 from object_removal.methods.track import identity
-from object_removal.methods.track import optflow, sam2, sam3, xmem
+from object_removal.methods.track import optflow, sam3, xmem
 
 
 def run_track_stage(
@@ -86,51 +86,6 @@ def run_track_stage(
                 score_thresh=float(s3.get("score_thresh", 0.0)),
             ),
         )
-        write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
-        return out_dir
-
-    if method == "sam2":
-        # SAM2 expects a base dir containing <video_name>/frames
-        video_name = frames_dir.name
-        tmp_base = layout.track_dir / "tmp_sam2_base"
-        tmp_in_masks = layout.track_dir / "tmp_sam2_init_masks" / video_name
-        tmp_out = layout.track_dir / "tmp_sam2_masks_raw"
-        tmp_base.mkdir(parents=True, exist_ok=True)
-        tmp_out.mkdir(parents=True, exist_ok=True)
-        tmp_in_masks.mkdir(parents=True, exist_ok=True)
-
-        # symlink frames
-        link = tmp_base / video_name
-        if not link.exists():
-            link.symlink_to(frames_dir.resolve(), target_is_directory=True)
-        # copy init mask(s)
-        for p in sorted(in_masks_dir.glob("*.png")):
-            (tmp_in_masks / p.name).write_bytes(p.read_bytes())
-
-        video_list = layout.track_dir / "video_list.txt"
-        video_list.write_text(video_name + "\n", encoding="utf-8")
-
-        meta = sam2.run(
-            repo_root=root,
-            base_video_dir=tmp_base,
-            input_mask_dir=tmp_in_masks.parent,
-            video_list_file=video_list,
-            output_mask_dir=tmp_out,
-            params=sam2.Params(
-                cfg=Path("modules/sam2/sam2/configs/sam2.1/sam2.1_hiera_l.yaml"),
-                checkpoint=Path("ckpts/sam2/sam2.1_hiera_large.pt"),
-                score_thresh=0.0,
-            ),
-        )
-
-        # convert indexed masks to canonical binary
-        from object_removal.io.masks import list_mask_files, read_mask_u8, to_binary_255, write_mask_u8
-
-        raw_seq = tmp_out / video_name
-        files = list_mask_files(raw_seq)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for p in files:
-            write_mask_u8(out_dir / p.name, to_binary_255(read_mask_u8(p)))
         write_method_manifest(layout.track_dir, stage="track", method=method, params=meta)
         return out_dir
 

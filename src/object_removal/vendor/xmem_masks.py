@@ -48,8 +48,14 @@ def parse_args() -> argparse.Namespace:
         "--xmem-bidirectional-merge",
         type=str,
         default="union",
-        choices=["union", "intersection"],
-        help="How to fuse forward vs reverse masks in the bidirectional step.",
+        choices=["union", "intersection", "vote"],
+        help="How to fuse forward vs reverse masks in the bidirectional step (vote = keep union components overlapping intersection >= threshold).",
+    )
+    parser.add_argument(
+        "--xmem-bidirectional-vote-threshold",
+        type=float,
+        default=0.3,
+        help="When --xmem-bidirectional-merge=vote, min overlap ratio with intersection to keep a union component.",
     )
     parser.add_argument(
         "--xmem-two-stage-anchor-idx",
@@ -202,8 +208,13 @@ def _fuse_bidirectional_indexed(
     fwd: List[np.ndarray],
     rev_mapped: List[np.ndarray],
     merge: str,
+    vote_threshold: float = 0.3,
 ) -> List[np.ndarray]:
-    """Union: prefer forward, fill gaps with reverse. Intersection: keep only where both agree."""
+    """Union: prefer forward, fill gaps with reverse.
+    Intersection: keep only where both agree.
+    Vote: keep union components whose overlap with intersection >= threshold."""
+    import cv2
+
     out: List[np.ndarray] = []
     for i in range(len(fwd)):
         a = fwd[i]
@@ -212,6 +223,20 @@ def _fuse_bidirectional_indexed(
         br = b > 0
         if merge == "intersection":
             out.append(np.where(bp & br, a, 0).astype(np.uint8))
+        elif merge == "vote":
+            inter = (bp & br).astype(np.uint8)
+            u_all = np.where(bp, a, 0)
+            u_all = np.where(~bp & br, b, u_all).astype(np.uint8)
+            # Per connected component in union: keep if overlap with intersection >= threshold
+            num_labels, labels = cv2.connectedComponents(u_all)
+            result = np.zeros_like(u_all)
+            for oid in range(1, num_labels):
+                comp = (labels == oid)
+                comp_area = int(comp.sum())
+                overlap = int((comp & inter).sum())
+                if comp_area > 0 and overlap / comp_area >= vote_threshold:
+                    result = np.where(comp, u_all, result)
+            out.append(result)
         else:
             u = np.where(bp, a, 0)
             u = np.where(~bp & br, b, u)
@@ -334,9 +359,10 @@ def main() -> None:
             masks_rev_loc, _painted_rev = run_generator(rev_full, working_masks[-1].copy())
             masks_rev_global = [masks_rev_loc[t - 1 - j] for j in range(t)]
             merge_mode = str(args.xmem_bidirectional_merge).strip().lower()
-            if merge_mode not in ("union", "intersection"):
+            if merge_mode not in ("union", "intersection", "vote"):
                 raise ValueError(f"Invalid bidirectional merge: {args.xmem_bidirectional_merge!r}")
-            working_masks = _fuse_bidirectional_indexed(working_masks, masks_rev_global, merge_mode)
+            vote_threshold = float(args.xmem_bidirectional_vote_threshold)
+            working_masks = _fuse_bidirectional_indexed(working_masks, masks_rev_global, merge_mode, vote_threshold)
             print(f"[xmem] bidirectional fusion ({merge_mode}) applied.")
     finally:
         os.chdir(old_cwd)

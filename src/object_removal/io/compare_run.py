@@ -144,11 +144,18 @@ def load_compare_yaml(path: Path) -> Dict[str, Any]:
 
 def default_out_root_for_task(task: str, *, repo_root: Path) -> Path:
     if task.startswith("davis:"):
-        seq = task.split(":", 1)[1].strip()
-        if not seq:
+        raw = task.split(":", 1)[1].strip()
+        if not raw:
             raise ValueError(f"Invalid task (empty seq): {task!r}")
-        return (repo_root / "outputs" / "compare" / seq).resolve()
-    raise ValueError(f"Cannot derive default out_root for task: {task!r} (only davis:SEQ supported)")
+        # Sanitize batch specs to a safe directory name.
+        if raw.lower() == "all":
+            name = "davis_batch"
+        elif raw.startswith("[") and raw.endswith("]"):
+            name = "davis_batch"
+        else:
+            name = raw
+        return (repo_root / "outputs" / "compare" / name).resolve()
+    raise ValueError(f"Cannot derive default out_root for task: {task!r} (only davis:SEQ / davis:[...] / davis:all supported)")
 
 
 def load_env_map(path: Path) -> Dict[str, Dict[str, str]]:
@@ -395,10 +402,18 @@ def resolve_compare_context(
             out_root_p = (repo_root / out_root_p).resolve()
 
     if not task_res.startswith("davis:"):
-        raise ValueError("Only davis:SEQ is supported in MVP compare runner.")
+        raise ValueError("Only davis:SEQ / davis:[...] / davis:all is supported.")
 
-    seq = task_res.split(":", 1)[1]
-    frames_dir, gt_mask_dir = resolve_davis_paths(davis_root_p, seq)
+    raw_seq = task_res.split(":", 1)[1]
+    _is_batch = raw_seq.strip().lower() == "all" or (raw_seq.strip().startswith("[") and raw_seq.strip().endswith("]"))
+
+    if _is_batch:
+        # Batch task: resolve a placeholder single-sequence context.
+        # Per-sequence frames_dir/gt_mask_dir are resolved later in the batch loop.
+        frames_dir = davis_root_p  # placeholder
+        gt_mask_dir = davis_root_p
+    else:
+        frames_dir, gt_mask_dir = resolve_davis_paths(davis_root_p, raw_seq)
     gt_frames_dir = frames_dir
 
     runs_root = out_root_p / "runs"
