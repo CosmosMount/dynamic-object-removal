@@ -65,8 +65,8 @@
         <img class="project-hero-logo-title" src="./assets/images/logo-title.png" alt="">
         <h1 class="title project-hero-main-title publication-title mb-0">DynaClear: Automatic video object removal and inpainting framework</h1>
       </div>
-      <p class="subtitle is-5 project-hero-subtitle mt-4">
-        Qualitative <strong>inpainting</strong> and <strong>mask_vis</strong> on DAVIS, with quantitative summaries across <strong>8 sequences</strong> and <strong>5 methods</strong> including mask fusion.
+      <p class="subtitle is-6 project-hero-subtitle">
+        Fully automatic removal on <strong>8 DAVIS</strong> sequences: VGGT4D motion priors, dual-tracker VOS (XMem + SAM&nbsp;3), reliability-aware vote fusion, and diffusion- or flow-based inpainting.
       </p>
     </div>
   </div>
@@ -77,13 +77,15 @@
     <h2 class="title is-3">Abstract</h2>
     <div class="content has-text-justified">
       <p>
-        Video object removal requires temporally stable segmentation of a target region together with plausible inpainting of the occluded background.
-        Strong video segmenters typically assume explicit user interaction on the first frame, while geometry-aware motion cues can propose foreground-like regions automatically but often yield fragmented masks or weak alignment with object boundaries when a single salient instance must be removed.
+        Fully automatic video object removal requires identifying a temporally consistent target without user interaction and synthesizing plausible content in its absence.
+        Motion cues enable automatic discovery but lack instance-level abstraction; promptable segmentation models provide abstraction but require manual initialization.
       </p>
       <p>
-        <strong>DynaClear</strong> is a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>dual-tracker mask propagation</strong> (XMem + SAM3), <strong>consensus-based vote fusion</strong>, and <strong>DiffuEraser</strong> diffusion-based inpainting.
-        VGGT4D produces per-frame dynamic masks automatically consolidated into an initialization; XMem and SAM3 independently propagate it using two-stage anchoring; their outputs are fused via per-pixel intersection with area-ratio fallback; DiffuEraser then inpaints conditioned on the refined mask sequence.
-        Compared with feeding raw VGGT-style dynamic masks directly to the inpainter, dual-tracker fusion substantially improves boundary precision (\(F_m\), \(F_r\)) and mask score; compared with interactive-only setups, the pipeline derives prompts from motion priors without manual clicks or boxes.
+        We formulate this task as <strong>motion-to-instance hypothesis resolution</strong>.
+        <strong>DynaClear</strong> starts from <strong>VGGT4D</strong> motion-derived priors, propagates masks with two complementary trackers (<strong>XMem</strong> and <strong>SAM&nbsp;3</strong>), and treats their outputs as competing hypotheses.
+        A <strong>training-free, reliability-aware fusion</strong> rule resolves disagreement via area-based statistics: intersection when trackers agree (\(\rho_t \le \tau\)), and XMem fallback when they strongly disagree.
+        The fused masks feed <strong>DiffuEraser</strong> or <strong>ProPainter</strong> for inpainting.
+        On eight DAVIS sequences, vote fusion achieves the strongest boundary metrics and overall mask score among fully automatic configurations in our study.
       </p>
     </div>
   </div>
@@ -197,31 +199,29 @@
 
     <h3 class="title is-4 mt-5">Post-processing and alignment</h3>
     <p class="has-text-justified">
-      Following propagation, we convert the SAM3 outputs into standardized binary mask sequences and align them with the original video frames.
-      This step prepares the exact frame–mask pairs required by the downstream inpainting stage and generates visual overlays for qualitative evaluation.
+      Fused masks are converted into standardized binary sequences and aligned with the original frames for inpainting and visualization.
     </p>
 
-    <h3 class="title is-4 mt-5">Diffusion-based video inpainting with DiffuEraser</h3>
+    <h3 class="title is-4 mt-5">Reliability-aware fusion (XMem + SAM&nbsp;3 vote)</h3>
     <p class="has-text-justified">
-      Finally, we inpaint the masked regions using <strong>DiffuEraser</strong>.
-      This module consumes the original frames \(\{I_t\}\) and refined masks \(\{M_t\}\) to synthesize the final edited video \(\{\hat{I}_t\}_{t=1}^{T}\).
-      The quality of this generative process relies heavily on diffusion priors (e.g., latent diffusion) and conditional control mechanisms.
-    </p>
-
-    <h3 class="title is-4 mt-5">Mask fusion: XMem + SAM3 vote</h3>
-    <p class="has-text-justified">
-      To further improve mask robustness across diverse sequences, we introduce a <strong>mask fusion</strong> strategy.
-      Given the tracked masks from two independent propagation pipelines (XMem and SAM3), we apply per-frame <strong>intersection voting</strong>:
+      Given propagated sequences \(\hat{M}_t^{\mathrm{xm}}\) and \(\hat{M}_t^{\mathrm{sam}}\), we measure inter-tracker disagreement with the area ratio
     </p>
     <div class="math-display my-4">
       \[
-        M^{\mathrm{fuse}}_t = M^{\mathrm{xmem}}_t \cap M^{\mathrm{sam3}}_t,
+        \rho_t = \frac{\max(A_t^{\mathrm{xm}}, A_t^{\mathrm{sam}})}{\max(\min(A_t^{\mathrm{xm}}, A_t^{\mathrm{sam}}), 1)}.
       \]
     </div>
     <p class="has-text-justified">
-      where intersection is taken only when the area ratio between the two masks is below a threshold (default 1.5), thereby suppressing contradictory predictions.
-      The fused mask sequence can be inpainted with either <strong>ProPainter</strong> (<code>vggt4d_xmem_sam3_vote</code>) or <strong>DiffuEraser</strong> (<code>vggt4d_xmem_sam3_vote_diffueraser</code>).
-      Empirically, vote fusion tends to improve boundary precision (\(F_m\), \(F_r\)) while preserving region similarity (\(J_m\)), as reported in the quantitative table.
+      With threshold \(\tau{=}1.5\) (default), \(M_t = \hat{M}_t^{\mathrm{xm}} \cap \hat{M}_t^{\mathrm{sam}}\) if \(\rho_t \le \tau\), else \(M_t = \hat{M}_t^{\mathrm{xm}}\).
+      Intersection enforces precision under agreement; the XMem fallback recovers recall when SAM&nbsp;3 collapses.
+      Mean mask score on eight DAVIS sequences: <strong>0.723</strong> (vote) vs.&nbsp;0.595 (XMem) and 0.635 (SAM3).
+    </p>
+
+    <h3 class="title is-4 mt-5">Video inpainting (DiffuEraser / ProPainter)</h3>
+    <p class="has-text-justified">
+      We inpaint fused masks with <strong>DiffuEraser</strong> (diffusion-based; default in our demos) or <strong>ProPainter</strong> (flow-based propagation).
+      Both map \(\{I_t, M_t\}\) to edited frames \(\{\hat{I}_t\}_{t=1}^{T}\)
+      (<code>vggt4d_xmem_sam3_vote_diffueraser</code> and <code>vggt4d_xmem_sam3_vote</code>).
     </p>
 
     <h3 class="title is-4 mt-5">Automatic baseline: VGGT-only + DiffuEraser</h3>
@@ -757,7 +757,7 @@
       </p>
       <div class="math-display my-3">
         \[
-          	ext{mask_score} = \dfrac{J_m + J_r + F_m + F_r}{4}
+          	\text{Mask Score} = \dfrac{J_m + J_r + F_m + F_r}{4}
         \]
       </div>
       <p>
@@ -778,63 +778,87 @@
       </p>
     </div>
 
-    <div class="table-container">
-      <table class="table is-bordered is-striped is-narrow is-size-7">
-        <thead>
-          <tr>
-            <th>Sequence</th>
-            <th>Method</th>
-            <th><em>J<sub>m</sub></em></th>
-            <th><em>J<sub>r</sub></em></th>
-            <th>Mask score</th>
-            <th>Temp. warp</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>bmx-trees</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.613</td><td>0.825</td><td>0.542</td><td>30.402</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d_sam3</td><td>0.586</td><td>0.800</td><td>0.485</td><td>30.711</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d_xmem</td><td>0.575</td><td>0.750</td><td>0.501</td><td>30.697</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d</td><td>0.158</td><td>0.050</td><td>0.130</td><td>29.087</td></tr>
-          <tr><td>bmx-trees</td><td>yolo_sam3</td><td>0.617</td><td>0.825</td><td>0.587</td><td>30.717</td></tr>
-          <tr><td>tennis</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.902</td><td>1.000</td><td>0.912</td><td>12.278</td></tr>
-          <tr><td>tennis</td><td>vggt4d_sam3</td><td>0.760</td><td>1.000</td><td>0.389</td><td>12.340</td></tr>
-          <tr><td>tennis</td><td>vggt4d_xmem</td><td>0.910</td><td>1.000</td><td>0.924</td><td>12.252</td></tr>
-          <tr><td>tennis</td><td>vggt4d</td><td>0.619</td><td>0.771</td><td>0.416</td><td>12.869</td></tr>
-          <tr><td>tennis</td><td>yolo_sam3</td><td>0.855</td><td>1.000</td><td>0.772</td><td>12.275</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.617</td><td>0.659</td><td>0.590</td><td>35.582</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_sam3</td><td>0.883</td><td>0.967</td><td>0.842</td><td>35.830</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_xmem</td><td>0.463</td><td>0.516</td><td>0.360</td><td>35.519</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d</td><td>0.094</td><td>0.000</td><td>0.049</td><td>27.435</td></tr>
-          <tr><td>scooter-board</td><td>yolo_sam3</td><td>0.696</td><td>0.890</td><td>0.659</td><td>36.356</td></tr>
-          <tr><td>bear</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.960</td><td>1.000</td><td>0.899</td><td>17.054</td></tr>
-          <tr><td>bear</td><td>vggt4d_sam3</td><td>0.959</td><td>1.000</td><td>0.877</td><td>16.903</td></tr>
-          <tr><td>bear</td><td>vggt4d_xmem</td><td>0.956</td><td>1.000</td><td>0.885</td><td>16.916</td></tr>
-          <tr><td>bear</td><td>vggt4d</td><td>0.684</td><td>1.000</td><td>0.465</td><td>16.985</td></tr>
-          <tr><td>bear</td><td>yolo_sam3</td><td>0.948</td><td>1.000</td><td>0.839</td><td>16.905</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.979</td><td>1.000</td><td>0.816</td><td>25.490</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_sam3</td><td>0.979</td><td>1.000</td><td>0.815</td><td>25.805</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_xmem</td><td>0.917</td><td>1.000</td><td>0.571</td><td>25.656</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d</td><td>0.658</td><td>0.888</td><td>0.291</td><td>28.037</td></tr>
-          <tr><td>cat-girl</td><td>yolo_sam3</td><td>0.860</td><td>1.000</td><td>0.676</td><td>26.036</td></tr>
-          <tr><td>gold-fish</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.695</td><td>1.000</td><td>0.642</td><td>4.595</td></tr>
-          <tr><td>gold-fish</td><td>vggt4d_sam3</td><td>0.318</td><td>0.000</td><td>0.303</td><td>7.015</td></tr>
-          <tr><td>gold-fish</td><td>vggt4d_xmem</td><td>0.695</td><td>1.000</td><td>0.642</td><td>5.065</td></tr>
-          <tr><td>gold-fish</td><td>vggt4d</td><td>0.670</td><td>1.000</td><td>0.384</td><td>5.391</td></tr>
-          <tr><td>gold-fish</td><td>yolo_sam3</td><td>0.487</td><td>0.410</td><td>0.540</td><td>6.619</td></tr>
-          <tr><td>hockey</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.799</td><td>1.000</td><td>0.526</td><td>10.731</td></tr>
-          <tr><td>hockey</td><td>vggt4d_sam3</td><td>0.781</td><td>1.000</td><td>0.454</td><td>11.046</td></tr>
-          <tr><td>hockey</td><td>vggt4d_xmem</td><td>0.409</td><td>0.160</td><td>0.313</td><td>10.410</td></tr>
-          <tr><td>hockey</td><td>vggt4d</td><td>0.472</td><td>0.360</td><td>0.334</td><td>10.709</td></tr>
-          <tr><td>hockey</td><td>yolo_sam3</td><td>0.756</td><td>1.000</td><td>0.678</td><td>10.684</td></tr>
-          <tr><td>kite-surf</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.580</td><td>1.000</td><td>0.350</td><td>10.422</td></tr>
-          <tr><td>kite-surf</td><td>vggt4d_sam3</td><td>0.559</td><td>1.000</td><td>0.355</td><td>10.904</td></tr>
-          <tr><td>kite-surf</td><td>vggt4d_xmem</td><td>0.361</td><td>0.020</td><td>0.334</td><td>10.723</td></tr>
-          <tr><td>kite-surf</td><td>vggt4d</td><td>0.234</td><td>0.000</td><td>0.127</td><td>10.660</td></tr>
-          <tr><td>kite-surf</td><td>yolo_sam3</td><td>0.621</td><td>1.000</td><td>0.367</td><td>11.000</td></tr>
-        </tbody>
-      </table>
+    <style>
+      table {
+        border-collapse: collapse;
+        margin: 20px 0;
+        width: 100%;
+        font-size: 14px;
+      }
+      th, td {
+        border: 1px solid #ccc;
+        padding: 6px 10px;
+        text-align: center;
+      }
+      th {
+        background: #f5f5f5;
+      }
+      .left {
+        text-align: left;
+      }
+      .green {
+        color: #1a7f37;
+        font-weight: bold;
+      }
+      .orange {
+        color: #d97706;
+        font-weight: bold;
+      }
+      .section {
+        margin-top: 40px;
+      }
+    </style>
+
+    <!-- ================= TABLE 1 ================= -->
+    <div class="section">
+    <table>
+      <thead>
+        <tr>
+          <th class="left">Method</th>
+          <th>Jm ↑</th>
+          <th>Jr ↑</th>
+          <th>Fm ↑</th>
+          <th>Fr ↑</th>
+          <th>Mask score ↑</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="left">Baseline</td><td>0.159</td><td>0.032</td><td>0.028</td><td>0.038</td><td>0.064</td></tr>
+        <tr><td class="left">VGGT4D (framewise)</td><td>0.448</td><td>0.509</td><td>0.186</td><td>0.189</td><td>0.333</td></tr>
+        <tr><td class="left">YOLO + OptFlow</td><td>0.313</td><td>0.240</td><td>0.027</td><td>0.027</td><td>0.152</td></tr>
+        <tr><td class="left">YOLO + XMem</td><td>0.710</td><td>0.782</td><td class="green">0.620</td><td class="green">0.571</td><td>0.671</td></tr>
+        <tr><td class="left">YOLO + SAM3</td><td class="green">0.730</td><td class="green">0.891</td><td>0.616</td><td class="orange">0.573</td><td class="green">0.702</td></tr>
+        <tr><td class="left">VGGT4D + XMem</td><td>0.661</td><td>0.681</td><td>0.540</td><td>0.498</td><td>0.595</td></tr>
+        <tr><td class="left">VGGT4D + SAM3</td><td>0.728</td><td>0.846</td><td>0.518</td><td>0.450</td><td>0.635</td></tr>
+        <tr><td class="left"><b>VGGT4D + XMem/SAM3 Vote</b></td>
+            <td class="orange">0.769</td><td class="orange">0.936</td>
+            <td class="orange">0.624</td><td>0.562</td><td class="orange">0.723</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead>
+        <tr>
+          <th class="left">Method</th>
+          <th>Rank</th>
+          <th>FastVQA ↑</th>
+          <th>Warp ↓</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="left">Vote + DiffuEraser</td><td>1</td><td>0.725</td><td>18.319</td></tr>
+        <tr><td class="left">Vote + ProPainter</td><td>2</td><td>0.753</td><td>18.568</td></tr>
+        <tr><td class="left">VGGT4D + SAM3 + ProPainter</td><td>3</td><td>0.753</td><td>18.819</td></tr>
+        <tr><td class="left">VGGT4D + XMem + ProPainter</td><td>4</td><td>0.740</td><td>18.405</td></tr>
+        <tr><td class="left">VGGT4D (framewise) + ProPainter</td><td>5</td><td>0.742</td><td>17.647</td></tr>
+        <tr>
+          <td class="left">Baseline</td>
+          <td>6</td>
+          <td class="orange">0.799</td>
+          <td class="green">12.598</td>
+        </tr>
+      </tbody>
+    </table>
     </div>
-  </div>
 </section>
 
 <footer class="footer">

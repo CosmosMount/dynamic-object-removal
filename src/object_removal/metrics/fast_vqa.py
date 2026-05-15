@@ -1,10 +1,9 @@
-"""Optional FastVQA / FasterVQA scoring via the upstream FAST-VQA-and-FasterVQA repo.
+"""FastVQA / FasterVQA scoring via vendored ``modules/FAST-VQA-and-FasterVQA``.
 
-Requires a local clone of https://github.com/VQAssessment/FAST-VQA-and-FasterVQA with
-dependencies installed (see that repo's README) and checkpoint paths configured in its
-YAML ``test_load_path`` fields. This module muxes inpaint frame folders to a short MP4,
-then runs ``<python> vqa.py -m <model> -v <mp4> -d <device>`` inside that repo root
-(``<python>`` defaults to ``FAST_VQA_PYTHON`` or ``sys.executable``).
+Conda env ``fastvqa`` (``configs/env_map.json`` → ``eval.fast_vqa``). Checkpoints under
+``ckpts/fastvqa/`` per ``options/fast/*.yml`` ``test_load_path``. Muxes inpaint frames to
+MP4, then runs ``<python> vqa.py -m <model> -v <mp4> -d <device>`` (``<python>`` from
+``eval.fast_vqa_python``, ``FAST_VQA_PYTHON``, or ``sys.executable``).
 """
 
 from __future__ import annotations

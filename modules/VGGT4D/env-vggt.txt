@@ -1,0 +1,24 @@
+# Conda env name: vggt  (configs/env_map.json → mask.vggt4d, mask.vggt_framewise)
+# Python >= 3.10 recommended.
+#
+# 1) Create env and install this repo (from repo root):
+#    conda create -n vggt python=3.10 -y
+#    conda activate vggt
+#    pip install -e .
+#
+# 2) Install PyTorch for your CUDA driver (example; adjust index-url / version):
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# 3) Minimal runtime deps for DynaClear mask stage (demo_vggt4d inference path):
+numpy
+Pillow
+huggingface_hub
+einops
+safetensors
+tqdm
+opencv-python
+scipy
+scikit-image
+scikit-learn
+open3d
+evo

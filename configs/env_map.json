@@ -17,7 +17,8 @@
     "baseline_handcrafted": ""
   },
   "eval": {
-    "default": ""
+    "default": "",
+    "fast_vqa": "fastvqa"
   }
 }
 

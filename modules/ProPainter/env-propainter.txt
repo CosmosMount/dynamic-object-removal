@@ -1,0 +1,25 @@
+# Conda env name: propainter  (configs/env_map.json → inpaint.propainter)
+# Python >= 3.10 recommended.
+#
+# 1) Create env and install this repo (from repo root):
+#    conda create -n propainter python=3.10 -y
+#    conda activate propainter
+#    pip install -e .
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#    pip install -r modules/ProPainter/env-propainter.txt
+#
+# Upstream full list: modules/ProPainter/requirements.txt (this file is a trimmed subset).
+numpy
+scipy
+opencv-python
+matplotlib
+scikit-image
+imageio-ffmpeg
+pyyaml
+requests
+timm
+einops
+av
+addict
+future
+yapf

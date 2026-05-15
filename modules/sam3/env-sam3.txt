@@ -1,0 +1,24 @@
+# Conda env name: sam3  (configs/env_map.json → mask.yolo_first, mask.baseline_yolo_motion, track.sam3)
+# Python 3.10–3.12; SAM3 upstream recommends PyTorch 2.7+ with matching CUDA.
+#
+# 1) Create env and install this repo (from repo root):
+#    conda create -n sam3 python=3.12 -y
+#    conda activate sam3
+#    pip install -e .
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#
+# 2) Install SAM3 (editable) and deps (includes ultralytics for YOLO mask methods):
+#    pip install -r modules/sam3/env-sam3.txt
+#
+-e modules/sam3
+timm>=1.0.17
+numpy>=1.26,<2
+tqdm
+ftfy==6.1.1
+regex
+iopath>=0.1.10
+typing_extensions
+huggingface_hub
+Pillow
+opencv-python-headless
+ultralytics

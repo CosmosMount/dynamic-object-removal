@@ -1,0 +1,18 @@
+# Conda env name: fastvqa  (configs/env_map.json → eval.fast_vqa)
+# Python >= 3.10. Used by eval subprocess (vqa.py), not the compare driver.
+#
+#    conda create -n fastvqa python=3.10 -y
+#    conda activate fastvqa
+#    cd /path/to/dynamic-object-removal
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#    pip install -r modules/FAST-VQA-and-FasterVQA/env-fastvqa.txt
+#
+# Checkpoints: configure test_load_path in options/fast/*.yml (default under ckpts/fastvqa/).
+decord
+einops
+numpy
+opencv-python
+PyYAML
+scikit-video
+timm
+tqdm

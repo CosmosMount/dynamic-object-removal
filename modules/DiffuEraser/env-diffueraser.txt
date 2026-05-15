@@ -1,0 +1,26 @@
+# Conda env name: diffueraser  (configs/env_map.json → inpaint.diffueraser)
+# Python 3.10 recommended. Versions below match modules/DiffuEraser/requirements.txt (inpaint backend is version-sensitive).
+#
+# 1) Create env and install this repo (from repo root):
+#    conda create -n diffueraser python=3.10 -y
+#    conda activate diffueraser
+#    pip install -e .
+#    pip install -r modules/DiffuEraser/env-diffueraser.txt
+#
+# 2) Prepare weights under ckpts/diffueraser/weights/ (see README).
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
+diffusers==0.29.2
+accelerate==0.25.0
+opencv-python==4.9.0.80
+imageio==2.34.1
+matplotlib
+transformers==4.41.1
+einops==0.8.0
+numpy==1.26.4
+pillow==10.4.0
+tqdm==4.66.4
+peft==0.13.2
+scipy==1.13.1
+av==14.0.1

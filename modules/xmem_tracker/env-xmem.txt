@@ -1,0 +1,15 @@
+# Conda env name: xmem  (configs/env_map.json → track.xmem)
+# Python >= 3.10 recommended.
+#
+# 1) Create env and install this repo (from repo root):
+#    conda create -n xmem python=3.10 -y
+#    conda activate xmem
+#    pip install -e .
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#    pip install -r modules/xmem_tracker/env-xmem.txt
+#
+# Vendored XMem runtime only (modules/xmem_tracker/); no separate XMem package install.
+numpy
+pyyaml
+torch
+torchvision

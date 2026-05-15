@@ -1,0 +1,13 @@
+# Conda env for running `compare` / eval in the CURRENT env (configs/env_map.json → eval.default: "")
+# Use when track.identity, track.optflow, inpaint.baseline_handcrafted, or eval run in-process.
+#
+#    conda create -n dynaclear-base python=3.10 -y
+#    conda activate dynaclear-base
+#    pip install -e .
+#
+# System: ffmpeg strongly recommended (apt install ffmpeg).
+numpy>=1.22
+opencv-python-headless>=4.8
+pyyaml>=6
+decord
+einops

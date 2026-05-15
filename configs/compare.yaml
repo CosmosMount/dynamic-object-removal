@@ -56,11 +56,11 @@ conda_exe: conda
 env_map: configs/env_map.json
 env_policy: auto
 
-# Optional: no-reference inpaint video quality via FastVQA (external repo).
+# FastVQA / FasterVQA (modules/FAST-VQA-and-FasterVQA; conda env fastvqa per env_map.json).
 eval:
   fast_vqa: true
-#   fast_vqa_root: modules/FAST-VQA-and-FasterVQA   # relative to repo root; omit to auto-detect modules/... or use FAST_VQA_ROOT
-#   fast_vqa_model: FasterVQA   # vqa.py -m
-#   fast_vqa_device: cuda   # if subprocess crashes (e.g. rc=-11 SIGSEGV), try cpu or set FAST_VQA_PYTHON
-#   fast_vqa_python: ""      # optional: path to python with fastvqa+decord; else FAST_VQA_PYTHON or current env
+#   fast_vqa_root: modules/FAST-VQA-and-FasterVQA
+#   fast_vqa_model: FasterVQA
+#   fast_vqa_device: cuda
+#   fast_vqa_python: ""   # default: sys.executable; set to fastvqa env python if decord/torch mismatch
 #   fast_vqa_fps: 24

@@ -172,6 +172,9 @@ def _collect_required_envs(ctx: CompareRunContext) -> List[str]:
             req.append(env_for(ctx.env_map, stage="inpaint", method=str(spec["inpaint"])))
         if st is None or st == "eval":
             req.append(env_for(ctx.env_map, stage="eval", method="internal"))
+            ev = ctx.cfg.get("eval")
+            if isinstance(ev, dict) and ev.get("fast_vqa"):
+                req.append(env_for(ctx.env_map, stage="eval", method="fast_vqa"))
     return req
 
 
