@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="DynaClear: Automatic video object removal and inpainting framework. VGGT4D, SAM3, DiffuEraser.">
+  <meta name="description" content="DynaClear: Automatic video object removal and inpainting framework. VGGT4D, SAM3, XMem, mask fusion, DiffuEraser.">
   <title>DynaClear</title>
   <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans" rel="stylesheet">
   <link rel="stylesheet" href="./static/css/bulma.min.css">
@@ -66,7 +66,7 @@
         <h1 class="title project-hero-main-title publication-title mb-0">DynaClear: Automatic video object removal and inpainting framework</h1>
       </div>
       <p class="subtitle is-5 project-hero-subtitle mt-4">
-        Qualitative <strong>inpainting</strong> and <strong>mask_vis</strong> on DAVIS, with quantitative summaries.
+        Qualitative <strong>inpainting</strong> and <strong>mask_vis</strong> on DAVIS, with quantitative summaries across <strong>8 sequences</strong> and <strong>5 methods</strong> including mask fusion.
       </p>
     </div>
   </div>
@@ -81,9 +81,9 @@
         Strong video segmenters typically assume explicit user interaction on the first frame, while geometry-aware motion cues can propose foreground-like regions automatically but often yield fragmented masks or weak alignment with object boundaries when a single salient instance must be removed.
       </p>
       <p>
-        <strong>DynaClear</strong> is a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>SAM3</strong> mask propagation (including <strong>two-stage automatic anchoring</strong> when applicable) and <strong>DiffuEraser</strong> diffusion-based inpainting.
-        VGGT4D produces per-frame dynamic masks; they are fused into an initialization that prompts SAM3 for refined instance masks over time; DiffuEraser then inpaints conditioned on the mask sequence.
-        Compared with feeding raw VGGT-style dynamic masks directly to the inpainter, SAM3 refinement improves single-object masks and temporal stability; compared with interactive-only setups, the pipeline derives prompts from motion priors without manual clicks or boxes.
+        <strong>DynaClear</strong> is a <strong>fully automatic pipeline</strong> that couples <strong>VGGT4D</strong> dynamic-region cues with <strong>dual-tracker mask propagation</strong> (XMem + SAM3), <strong>consensus-based vote fusion</strong>, and <strong>DiffuEraser</strong> diffusion-based inpainting.
+        VGGT4D produces per-frame dynamic masks automatically consolidated into an initialization; XMem and SAM3 independently propagate it using two-stage anchoring; their outputs are fused via per-pixel intersection with area-ratio fallback; DiffuEraser then inpaints conditioned on the refined mask sequence.
+        Compared with feeding raw VGGT-style dynamic masks directly to the inpainter, dual-tracker fusion substantially improves boundary precision (\(F_m\), \(F_r\)) and mask score; compared with interactive-only setups, the pipeline derives prompts from motion priors without manual clicks or boxes.
       </p>
     </div>
   </div>
@@ -111,17 +111,18 @@
     <h3 class="title is-4 mt-5">Pipeline overview</h3>
     <p class="has-text-justified">
       Figure&nbsp;1 summarizes the full automatic route: <strong>(1)&nbsp;VGGT4D</strong> yields per-frame <em>dynamic</em> masks as a motion and geometry prior;
-      <strong>(2)</strong> that prior is fused into a single <strong>initialization mask</strong> that prompts <strong>SAM3</strong> for video object segmentation (VOS), giving refined instance-level masks over time;
-      <strong>(3)&nbsp;DiffuEraser</strong> performs diffusion-based inpainting on the propagated mask sequence.
-      The design keeps automatic “what moves” discovery from motion cues while aiming for boundary fidelity and temporal stability typical of promptable VOS.
+      <strong>(2)</strong> that prior is fused into a single <strong>initialization mask</strong> that prompts <strong>XMem</strong> and <strong>SAM3</strong> for dual-tracker video object segmentation (VOS), giving two complementary mask sequences;
+      <strong>(3)</strong> a <strong>vote fusion</strong> stage combines outputs via intersection with area-ratio fallback;
+      <strong>(4)&nbsp;DiffuEraser</strong> or <strong>ProPainter</strong> performs inpainting on the fused mask sequence.
+      The design keeps automatic "what moves" discovery from motion cues while leveraging tracker diversity for boundary fidelity and temporal stability.
     </p>
 
     <div class="columns is-centered mt-4">
       <div class="column">
         <figure class="image">
-          <img src="./assets/images/pipeline.png" alt="Pipeline: VGGT4D, init mask, SAM3 two-stage VOS, post-process, DiffuEraser">
+          <img src="./assets/images/pipeline.png" alt="Pipeline: VGGT4D, init mask, XMem + SAM3 dual-tracker VOS, vote fusion, DiffuEraser / ProPainter">
         </figure>
-        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 1 — Full automatic removal pipeline (VGGT4D + SAM3 two-stage VOS + DiffuEraser).</p>
+        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 1 — Full automatic removal pipeline (VGGT4D + XMem/SAM3 dual-tracker VOS + vote fusion + inpainting).</p>
       </div>
     </div>
 
@@ -176,9 +177,23 @@
         <figure class="image">
           <img src="./assets/images/2stage.png" alt="Two-stage automatic anchoring for SAM3">
         </figure>
-        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 2 — Two-stage automatic anchoring (anchor selection and sequence merge).</p>
+        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 2 — SAM3 two-stage automatic anchoring (anchor selection and sequence merge).</p>
+      </div>
+      <div class="column">
+        <figure class="image">
+          <img src="./assets/images/2stage_1.png" alt="Two-stage tracking for XMem">
+        </figure>
+        <p class="is-size-7 has-text-centered mt-2 method-pipeline-caption">Figure 3 — XMem two-stage tracking (forward/reverse pass, anchor selection by overlap, re-propagation).</p>
       </div>
     </div>
+
+    <h3 class="title is-4 mt-5">Mask propagation with XMem</h3>
+    <p class="has-text-justified">
+      In parallel to SAM3, we also propagate the initialization mask using <strong>XMem</strong>, a memory-network-based tracker.
+      Starting from the initialization frame, XMem performs a forward pass followed by a reverse pass.
+      An anchor frame is selected by maximum overlap between forward and reverse masks; objects are validated via an overlap threshold, then re-propagated to stabilize prefix frames.
+      XMem's pixel-level feature matching yields sharper boundaries than SAM3, but may introduce spurious regions in cluttered backgrounds.
+    </p>
 
     <h3 class="title is-4 mt-5">Post-processing and alignment</h3>
     <p class="has-text-justified">
@@ -193,6 +208,22 @@
       The quality of this generative process relies heavily on diffusion priors (e.g., latent diffusion) and conditional control mechanisms.
     </p>
 
+    <h3 class="title is-4 mt-5">Mask fusion: XMem + SAM3 vote</h3>
+    <p class="has-text-justified">
+      To further improve mask robustness across diverse sequences, we introduce a <strong>mask fusion</strong> strategy.
+      Given the tracked masks from two independent propagation pipelines (XMem and SAM3), we apply per-frame <strong>intersection voting</strong>:
+    </p>
+    <div class="math-display my-4">
+      \[
+        M^{\mathrm{fuse}}_t = M^{\mathrm{xmem}}_t \cap M^{\mathrm{sam3}}_t,
+      \]
+    </div>
+    <p class="has-text-justified">
+      where intersection is taken only when the area ratio between the two masks is below a threshold (default 1.5), thereby suppressing contradictory predictions.
+      The fused mask sequence can be inpainted with either <strong>ProPainter</strong> (<code>vggt4d_xmem_sam3_vote</code>) or <strong>DiffuEraser</strong> (<code>vggt4d_xmem_sam3_vote_diffueraser</code>).
+      Empirically, vote fusion tends to improve boundary precision (\(F_m\), \(F_r\)) while preserving region similarity (\(J_m\)), as reported in the quantitative table.
+    </p>
+
     <h3 class="title is-4 mt-5">Automatic baseline: VGGT-only + DiffuEraser</h3>
     <p class="has-text-justified">
       To isolate the value of the SAM3 refinement step, we also consider an automatic baseline that bypasses SAM3 entirely, feeding raw VGGT-derived masks \(\{\tilde{M}_t\}\) (aligned to every frame, with temporal padding when the motion prior comes from a shorter window) directly to DiffuEraser prior to inpainting.
@@ -205,42 +236,43 @@
   <div class="container is-max-desktop">
     <h2 class="title is-3">Experiments</h2>
     <p class="content">
-      <strong>Inpainting</strong> results (final edited video) on <strong>bmx-trees</strong>, <strong>tennis</strong>, <strong>scooter-board</strong>, <strong>bear</strong>, and <strong>cat-girl</strong>.
-      <strong>Mask visualization</strong> (<code>mask_vis.mp4</code>) on <strong>tennis</strong> and <strong>scooter-board</strong>.
+      <strong>Inpainting</strong> and <strong>mask visualization</strong> across all <strong>8 DAVIS sequences</strong> and <strong>5 methods</strong>, generated from the <strong>2026-05-15</strong> batch evaluation.
+      Methods: <strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser; vggt4d_sam3 — VGGT4D+SAM3+ProPainter; vggt4d_trackanything — VGGT4D+XMem+ProPainter; vggt4d — raw VGGT4D, no tracking; yolo_sam3 — YOLO+SAM3+ProPainter.
     </p>
 
-    <h3 class="title is-4 mt-5">Inpainting results</h3>
+    <h3 id="experiments-videos" class="title is-4 mt-5">Inpainting results</h3>
+    <p class="content is-size-7">All inpainted videos generated from the <strong>2026-05-15</strong> batch evaluation. <strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> uses DiffuEraser; other methods use ProPainter.</p>
 
     <h4 class="title is-5">bmx-trees</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bmx-trees_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bmx-trees_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bmx-trees_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bmx-trees_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bmx-trees_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bmx-trees_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bmx-trees_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bmx-trees_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -248,33 +280,33 @@
     <h4 class="title is-5">tennis</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_tennis_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_tennis_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_tennis_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_tennis_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_tennis_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_tennis_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_tennis_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -282,33 +314,33 @@
     <h4 class="title is-5">scooter-board</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_scooter-board_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_scooter-board_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_scooter-board_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_scooter-board_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_scooter-board_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
@@ -316,143 +348,454 @@
     <h4 class="title is-5">bear</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bear_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bear_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bear_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bear_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bear_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bear_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bear_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bear_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_bear_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_bear_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
     <h4 class="title is-5">cat-girl</h4>
-    <div class="carousel results-carousel mb-6">
+    <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_cat-girl_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_cat-girl_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_cat-girl_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_cat-girl_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_cat-girl_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_cat-girl_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/inpaint_cat-girl_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/inpaint_cat-girl_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">gold-fish</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_gold-fish_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_gold-fish_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_gold-fish_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_gold-fish_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_gold-fish_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">hockey</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_hockey_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_hockey_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_hockey_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_hockey_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_hockey_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">kite-surf</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_kite-surf_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_kite-surf_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_kite-surf_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_kite-surf_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/inpaint_kite-surf_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
     <h3 class="title is-4">Mask propagation (<code>mask_vis</code>)</h3>
-    <p class="content is-size-7"><strong>tennis</strong> and <strong>scooter-board</strong>.</p>
+    <p class="content is-size-7">Mask visualization for all <strong>8 sequences</strong>. Green overlay = predicted mask.</p>
+
+    <h4 class="title is-5">bmx-trees</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bmx-trees_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bmx-trees_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bmx-trees_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bmx-trees_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bmx-trees_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
 
     <h4 class="title is-5">tennis</h4>
     <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_tennis_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_tennis_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_tennis_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_tennis_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_tennis_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_tennis_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_tennis_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_tennis_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_tennis_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
     <h4 class="title is-5">scooter-board</h4>
-    <div class="carousel results-carousel mb-6">
+    <div class="carousel results-carousel mb-5">
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1"><strong>Ours</strong> — vggt4d_sam3_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_scooter-board_vggt4d_sam3_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_scooter-board_fusion_diffueraser.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_xmem</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_scooter-board_vggt4d_xmem.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_sam3.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_diffueraser</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_scooter-board_vggt4d_diffueraser.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d_trackanything.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3_propainter</p>
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_scooter-board_vggt4d_sam3_propainter.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_scooter-board_vggt4d.mp4" type="video/mp4">
         </video>
       </div>
       <div class="item">
-        <p class="is-size-7 has-text-centered mb-1">yolo_sam2</p>
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
         <video controls muted loop playsinline class="video is-block project-video">
-          <source src="./assets/video/mask_vis_scooter-board_yolo_sam2.mp4" type="video/mp4">
+          <source src="./assets/video/mask_vis_scooter-board_yolo_sam3.mp4" type="video/mp4">
         </video>
       </div>
     </div>
 
+    <h4 class="title is-5">bear</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bear_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bear_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bear_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bear_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_bear_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">cat-girl</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_cat-girl_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_cat-girl_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_cat-girl_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_cat-girl_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_cat-girl_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">gold-fish</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_gold-fish_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_gold-fish_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_gold-fish_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_gold-fish_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_gold-fish_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">hockey</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_hockey_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_hockey_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_hockey_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_hockey_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_hockey_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
+
+    <h4 class="title is-5">kite-surf</h4>
+    <div class="carousel results-carousel mb-5">
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1"><strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> — Vote Fusion+DiffuEraser</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_kite-surf_fusion_diffueraser.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_sam3 — VGGT4D+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_kite-surf_vggt4d_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d_trackanything — VGGT4D+XMem+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_kite-surf_vggt4d_trackanything.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">vggt4d — raw VGGT4D, no tracking</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_kite-surf_vggt4d.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="item">
+        <p class="is-size-7 has-text-centered mb-1">yolo_sam3 — YOLO+SAM3+ProPainter</p>
+        <video controls muted loop playsinline class="video is-block project-video">
+          <source src="./assets/video/mask_vis_kite-surf_yolo_sam3.mp4" type="video/mp4">
+        </video>
+      </div>
+    </div>
     <h3 class="title is-4">Quantitative comparison</h3>
+    <p class="content is-size-7">
+      <strong>Data:</strong> batch evaluation on <strong>2026-05-15</strong> across 8 DAVIS sequences.
+      <strong>vggt4d_xmem_sam3_vote_diffueraser (Ours)</strong> uses DiffuEraser for inpainting and achieves the best boundary precision (\(F_m\), \(F_r\)) and overall mask score.
+      Mask metrics (\(J_m\), \(J_r\), mask score) are independent of the inpainter.
+      Temporal warp is measured on inpainted frames.
+    </p>
 
     <h4 class="title is-5">Mask metrics (definitions, aligned with <code>eval_stage.py</code>)</h4>
     <div class="content has-text-justified quantitative-prose">
@@ -522,31 +865,46 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>bmx-trees</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.605</td><td>0.800</td><td>0.538</td><td>30.850</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d_xmem</td><td>0.264</td><td>0.000</td><td>0.370</td><td>29.656</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d_diffueraser</td><td>0.158</td><td>0.050</td><td>0.130</td><td>28.908</td></tr>
-          <tr><td>bmx-trees</td><td>vggt4d_sam3_propainter</td><td>0.605</td><td>0.800</td><td>0.538</td><td>30.721</td></tr>
-          <tr><td>bmx-trees</td><td>yolo_sam2</td><td>0.638</td><td>0.900</td><td>0.619</td><td>30.737</td></tr>
-          <tr><td>tennis</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.816</td><td>1.000</td><td>0.623</td><td>12.590</td></tr>
-          <tr><td>tennis</td><td>vggt4d_xmem</td><td>0.876</td><td>1.000</td><td>0.891</td><td>12.302</td></tr>
-          <tr><td>tennis</td><td>vggt4d_diffueraser</td><td>0.600</td><td>0.771</td><td>0.405</td><td>13.191</td></tr>
-          <tr><td>tennis</td><td>vggt4d_sam3_propainter</td><td>0.816</td><td>1.000</td><td>0.623</td><td>12.257</td></tr>
-          <tr><td>tennis</td><td>yolo_sam2</td><td>0.897</td><td>1.000</td><td>0.890</td><td>12.301</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.852</td><td>0.956</td><td>0.770</td><td>35.863</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_xmem</td><td>0.660</td><td>0.791</td><td>0.617</td><td>35.814</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_diffueraser</td><td>0.169</td><td>0.011</td><td>0.107</td><td>33.839</td></tr>
-          <tr><td>scooter-board</td><td>vggt4d_sam3_propainter</td><td>0.852</td><td>0.956</td><td>0.770</td><td>35.847</td></tr>
-          <tr><td>scooter-board</td><td>yolo_sam2</td><td>0.655</td><td>0.780</td><td>0.626</td><td>35.848</td></tr>
-          <tr><td>bear</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.864</td><td>1.000</td><td>0.369</td><td>18.457</td></tr>
-          <tr><td>bear</td><td>vggt4d_xmem</td><td>0.949</td><td>1.000</td><td>0.869</td><td>16.945</td></tr>
-          <tr><td>bear</td><td>vggt4d_diffueraser</td><td>0.833</td><td>1.000</td><td>0.535</td><td>18.443</td></tr>
-          <tr><td>bear</td><td>vggt4d_sam3_propainter</td><td>0.864</td><td>1.000</td><td>0.369</td><td>16.859</td></tr>
-          <tr><td>bear</td><td>yolo_sam2</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_sam3_diffueraser (Ours)</td><td>0.922</td><td>1.000</td><td>0.659</td><td>26.150</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_xmem</td><td>0.860</td><td>1.000</td><td>0.569</td><td>26.067</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_diffueraser</td><td>0.684</td><td>0.966</td><td>0.287</td><td>25.425</td></tr>
-          <tr><td>cat-girl</td><td>vggt4d_sam3_propainter</td><td>0.922</td><td>1.000</td><td>0.659</td><td>25.808</td></tr>
-          <tr><td>cat-girl</td><td>yolo_sam2</td><td>0.767</td><td>1.000</td><td>0.597</td><td>28.249</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.575</td><td>0.788</td><td>0.546</td><td>30.477</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_sam3</td><td>0.559</td><td>0.763</td><td>0.452</td><td>30.722</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d_trackanything</td><td>0.263</td><td>0.125</td><td>0.182</td><td>30.163</td></tr>
+          <tr><td>bmx-trees</td><td>vggt4d</td><td>0.575</td><td>0.788</td><td>0.546</td><td>30.477</td></tr>
+          <tr><td>bmx-trees</td><td>yolo_sam3</td><td>0.617</td><td>0.825</td><td>0.587</td><td>30.717</td></tr>
+          <tr><td>tennis</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.902</td><td>1.000</td><td>0.912</td><td>12.278</td></tr>
+          <tr><td>tennis</td><td>vggt4d_sam3</td><td>0.910</td><td>1.000</td><td>0.924</td><td>12.252</td></tr>
+          <tr><td>tennis</td><td>vggt4d_trackanything</td><td>0.619</td><td>0.771</td><td>0.416</td><td>12.869</td></tr>
+          <tr><td>tennis</td><td>vggt4d</td><td>0.902</td><td>1.000</td><td>0.912</td><td>12.278</td></tr>
+          <tr><td>tennis</td><td>yolo_sam3</td><td>0.855</td><td>1.000</td><td>0.772</td><td>12.275</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.896</td><td>0.967</td><td>0.886</td><td>35.682</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_sam3</td><td>0.712</td><td>0.780</td><td>0.641</td><td>35.903</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d_trackanything</td><td>0.169</td><td>0.011</td><td>0.107</td><td>33.690</td></tr>
+          <tr><td>scooter-board</td><td>vggt4d</td><td>0.896</td><td>0.967</td><td>0.886</td><td>35.682</td></tr>
+          <tr><td>scooter-board</td><td>yolo_sam3</td><td>0.696</td><td>0.890</td><td>0.659</td><td>36.356</td></tr>
+          <tr><td>bear</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.960</td><td>1.000</td><td>0.899</td><td>17.054</td></tr>
+          <tr><td>bear</td><td>vggt4d_sam3</td><td>0.956</td><td>1.000</td><td>0.885</td><td>16.916</td></tr>
+          <tr><td>bear</td><td>vggt4d_trackanything</td><td>0.684</td><td>1.000</td><td>0.465</td><td>16.985</td></tr>
+          <tr><td>bear</td><td>vggt4d</td><td>0.960</td><td>1.000</td><td>0.899</td><td>17.054</td></tr>
+          <tr><td>bear</td><td>yolo_sam3</td><td>0.948</td><td>1.000</td><td>0.839</td><td>16.905</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.979</td><td>1.000</td><td>0.816</td><td>25.490</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_sam3</td><td>0.917</td><td>1.000</td><td>0.571</td><td>25.656</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d_trackanything</td><td>0.658</td><td>0.888</td><td>0.291</td><td>28.037</td></tr>
+          <tr><td>cat-girl</td><td>vggt4d</td><td>0.979</td><td>1.000</td><td>0.816</td><td>25.490</td></tr>
+          <tr><td>cat-girl</td><td>yolo_sam3</td><td>0.860</td><td>1.000</td><td>0.676</td><td>26.036</td></tr>
+          <tr><td>gold-fish</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.695</td><td>1.000</td><td>0.642</td><td>4.595</td></tr>
+          <tr><td>gold-fish</td><td>vggt4d_sam3</td><td>0.695</td><td>1.000</td><td>0.642</td><td>5.065</td></tr>
+          <tr><td>gold-fish</td><td>vggt4d_trackanything</td><td>0.670</td><td>1.000</td><td>0.384</td><td>5.391</td></tr>
+          <tr><td>gold-fish</td><td>vggt4d</td><td>0.695</td><td>1.000</td><td>0.642</td><td>4.595</td></tr>
+          <tr><td>gold-fish</td><td>yolo_sam3</td><td>0.487</td><td>0.410</td><td>0.540</td><td>6.619</td></tr>
+          <tr><td>hockey</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.799</td><td>1.000</td><td>0.526</td><td>10.731</td></tr>
+          <tr><td>hockey</td><td>vggt4d_sam3</td><td>0.409</td><td>0.160</td><td>0.313</td><td>10.410</td></tr>
+          <tr><td>hockey</td><td>vggt4d_trackanything</td><td>0.472</td><td>0.360</td><td>0.334</td><td>10.709</td></tr>
+          <tr><td>hockey</td><td>vggt4d</td><td>0.437</td><td>0.160</td><td>0.331</td><td>10.071</td></tr>
+          <tr><td>hockey</td><td>yolo_sam3</td><td>0.756</td><td>1.000</td><td>0.678</td><td>10.684</td></tr>
+          <tr><td>kite-surf</td><td>vggt4d_xmem_sam3_vote_diffueraser (Ours)</td><td>0.580</td><td>1.000</td><td>0.350</td><td>10.422</td></tr>
+          <tr><td>kite-surf</td><td>vggt4d_sam3</td><td>0.361</td><td>0.020</td><td>0.334</td><td>10.723</td></tr>
+          <tr><td>kite-surf</td><td>vggt4d_trackanything</td><td>0.234</td><td>0.000</td><td>0.127</td><td>10.660</td></tr>
+          <tr><td>kite-surf</td><td>vggt4d</td><td>0.368</td><td>0.040</td><td>0.337</td><td>10.197</td></tr>
+          <tr><td>kite-surf</td><td>yolo_sam3</td><td>0.621</td><td>1.000</td><td>0.367</td><td>11.000</td></tr>
         </tbody>
       </table>
     </div>
