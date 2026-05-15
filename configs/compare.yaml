@@ -12,9 +12,10 @@
 # - Omit `out_root` to use the default `outputs/compare/<SEQ>`.
 
 # task: davis:[bear,bmx-trees,gold-fish,cat-girl,scooter-board,kite-surf,tennis,hockey]
-task: davis:[kite-surf,hockey]
-davis_root: data/DAVIS
-# out_root: outputs/compare/cat-girl
+# task: davis:[scooter-board,bmx-trees]
+task: video:walking1.mp4
+# davis_root: data/DAVIS
+out_root: outputs/wild-walking1
 
 # Pipeline selection:
 # - `pipelines_config` points to the registry file that defines `pipelines:`.

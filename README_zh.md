@@ -240,7 +240,7 @@ python -m object_removal.cli.compare
 
 **combined 指标怎么读**
 
-- **`mask_score`**：有逐帧预测 mask 与 GT 时 **`(mask_jm + mask_fm + mask_fr) / 3`**（`mask_fm` 为边界 F-mean，`mask_fr` 为边界 F-recall，与 `metrics_summary.json` 中字段一致）。仅来自 **Davis 汇总 CSV**（无 FM/FR）时为 **`(mask_jm + mask_jr) / 2`**。
+- **`mask_score`**：**`(mask_jm + mask_jr + mask_fm + mask_fr) / 4`**。
 - **`quality_score`**：当前**固定为 `null`**，不再做无参考合成（`quality_score_source` 为 `disabled_no_single_reference_metric`）。`bg_l1_mean`、时序 warp、Laplacian、BRISQUE 等仍写入 `metrics_summary.json` 供人工或后续模型使用。
 - **越高越好**：`mask_jm`、`mask_jr`、`mask_fm`、`mask_fr`、`mask_score`。
 - **越低越好**：`bg_l1_mean`、`temporal_warp_error_mean`、`temporal_warp_error_hole_mean`。`flow_consistency_mean` 为相邻帧光流在背景上的变化幅度，**越低越稳**。

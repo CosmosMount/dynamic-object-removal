@@ -64,7 +64,7 @@
 
 parameters:
   vggt4d:
-    dyn_threshold_scale: 0.7
+    dyn_threshold_scale: 0.3
     max_frames_for_vggt: 20
     threshold: 0
     merge_all: true
@@ -84,9 +84,9 @@ parameters:
     score_thresh: 0.0
   diffueraser:
     # Omit `video_length` to keep the default `ceil(num_frames / 24)` behavior.
-    mask_dilation_iter: 6
+    mask_dilation_iter: 12
     max_img_size: 768
-    ref_stride: 10
+    ref_stride: 8
     neighbor_length: 10
     subvideo_length: 50
   propainter:

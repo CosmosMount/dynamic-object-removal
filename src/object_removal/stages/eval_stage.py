@@ -66,20 +66,11 @@ def _mask_score_from_components(
 ) -> Optional[float]:
     """Blend mask metrics into one summary score.
 
-    When per-frame masks are available, the score is the mean of JM, FM, and FR.
-    When only a DAVIS CSV summary is available, the fallback score is `(JM + JR) / 2`.
+    Assumes all components are available.
     """
-    if jm is None:
+    if jm is None or jr is None or fm is None or fr is None:
         return None
-    if fm is not None and fr is not None:
-        return float((jm + fm + fr) / 3.0)
-    if fm is not None:
-        return float((jm + fm) / 2.0)
-    if fr is not None:
-        return float((jm + fr) / 2.0)
-    if jr is not None:
-        return float(0.5 * jm + 0.5 * jr)
-    return float(jm)
+    return float((jm + jr + fm + fr) / 4.0)
 
 
 def load_davis_jm_jr(davis_csv: Path) -> Tuple[Optional[float], Optional[float]]:
