@@ -17,7 +17,7 @@ Motion priors (VGGT4D) initialize dual-tracker propagation (XMem, SAM 3); reliab
 ## Setup
 
 1. DAVIS under `data/DAVIS` (§2).
-2. Checkpoints under `ckpts/` ([Drive](https://drive.google.com/drive/folders/1iLGFL-ASrsymbmVhEBDXMnfaSD6uNd_M?usp=sharing)).
+2. Checkpoints under `ckpts/` ([Drive](https://drive.google.com/drive/folders/15S5f7VWr7tWAEa4yf3ZHxLC_Phlj7Cxm?usp=sharing)).
 3. Conda environments per §5.
 4. `configs/compare.yaml`: `task`, `pipelines`, `overwrite`, optional `out_root`.
 
@@ -61,7 +61,6 @@ Task: `task: davis:<SEQ>` (e.g. `davis:bmx-trees`).
 | Component | Path |
 |-----------|------|
 | VGGT4D | `ckpts/vggt4d/model_tracker_fixed_e20.pt` (auto-download via `demo_vggt4d.py` if absent) |
-| SAM2 | `ckpts/sam2/` |
 | SAM3 | `ckpts/sam3/sam3.pt` |
 | YOLOv8-seg | `ckpts/yolo/yolov8n-seg.pt` |
 | XMem | `ckpts/xmem/XMem-s012.pth` |

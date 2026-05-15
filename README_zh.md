@@ -17,7 +17,7 @@ VGGT4D 运动先验初始化双路跟踪（XMem、SAM 3）；可靠性 vote fusi
 ## 部署
 
 1. DAVIS 置于 `data/DAVIS`（§2）。
-2. 权重置于 `ckpts/`（[Drive](https://drive.google.com/drive/folders/1iLGFL-ASrsymbmVhEBDXMnfaSD6uNd_M?usp=sharing)）。
+2. 权重置于 `ckpts/`（[Drive](https://drive.google.com/drive/folders/15S5f7VWr7tWAEa4yf3ZHxLC_Phlj7Cxm?usp=sharing)）。
 3. 按 §5 创建 conda 环境。
 4. 配置 `configs/compare.yaml`：`task`、`pipelines`、`overwrite`、可选 `out_root`。
 
@@ -61,7 +61,6 @@ data/DAVIS/
 | 模块 | 路径 |
 |------|------|
 | VGGT4D | `ckpts/vggt4d/model_tracker_fixed_e20.pt`（缺失时 `demo_vggt4d.py` 可自动下载） |
-| SAM2 | `ckpts/sam2/` |
 | SAM3 | `ckpts/sam3/sam3.pt` |
 | YOLOv8-seg | `ckpts/yolo/yolov8n-seg.pt` |
 | XMem | `ckpts/xmem/XMem-s012.pth` |
