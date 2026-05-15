@@ -184,6 +184,8 @@ def mp4_to_frames(video_path: Path, out_dir: Path, *, ext: str = ".png") -> None
                 str(video_path),
                 "-vsync",
                 "0",
+                "-start_number",
+                "0",
                 pattern,
             ],
             capture_output=True,

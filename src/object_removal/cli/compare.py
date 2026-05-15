@@ -332,8 +332,8 @@ def _run_pipelines_for_task(
     compare_cfg_path = ctx.compare_cfg_path
 
     meta_root.mkdir(parents=True, exist_ok=True)
-    seq = task.split(":", 1)[1]
-    task_meta = {"type": "davis", "seq": seq, "davis_root": str(davis_root)}
+    task_type, seq = task.split(":", 1)
+    task_meta = {"type": task_type, "seq": seq, "davis_root": str(davis_root)}
     (meta_root / "task.json").write_text(json.dumps(task_meta, indent=2), encoding="utf-8")
     (meta_root / "compare_run.json").write_text(
         json.dumps(
@@ -846,10 +846,58 @@ def main() -> None:
     if ctx.env_policy != "force_single":
         _require_envs(ctx.conda_exe, _collect_required_envs(ctx))
 
-    # Expand tasks: davis:SEQ, davis:[s1,s2,...], or davis:all
-    seqs = expand_davis_tasks(ctx.task, ctx.davis_root)
+    # Expand tasks: davis:SEQ, davis:[...], davis:all, video:PATH, video:[...], video:all
+    task_type = ctx.task.split(":", 1)[0]
+    if task_type == "video":
+        from object_removal.io.compare_run import expand_video_tasks, _resolve_video_frames
 
-    if len(seqs) == 1:
+        video_paths = expand_video_tasks(ctx.task, repo_root=repo_root)
+    else:
+        seqs = expand_davis_tasks(ctx.task, ctx.davis_root)
+
+    if task_type == "video":
+        if len(video_paths) == 1:
+            ctx = replace(
+                ctx,
+                frames_dir=_resolve_video_frames(
+                    video_paths[0], repo_root=repo_root, out_root=ctx.out_root
+                ),
+                gt_mask_dir=ctx.out_root / "_no_gt",
+                gt_frames_dir=ctx.out_root / "frames",
+            )
+            _run_pipelines_for_task(ctx, fast_vqa_eval_kw)
+        else:
+            seq_rows_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+            for i, vp in enumerate(video_paths):
+                vname = Path(vp).stem
+                seq_out_root = ctx.out_root / vname
+                seq_frames_dir = _resolve_video_frames(
+                    vp, repo_root=repo_root, out_root=seq_out_root
+                )
+                seq_ctx = replace(
+                    ctx,
+                    task=f"video:{vp}",
+                    frames_dir=seq_frames_dir,
+                    gt_mask_dir=seq_out_root / "_no_gt",
+                    gt_frames_dir=seq_frames_dir,
+                    out_root=seq_out_root,
+                    runs_root=seq_out_root / "runs",
+                    summary_root=seq_out_root / "summary",
+                    meta_root=seq_out_root / "meta",
+                )
+                print(f"\n[compare] === batch [{i + 1}/{len(video_paths)}]: {vname} ===")
+                rows = _run_pipelines_for_task(seq_ctx, fast_vqa_eval_kw)
+                for row in rows:
+                    seq_rows_map[str(row.get("method", ""))].append(row)
+
+            avg_rows = _average_rows(seq_rows_map)
+            batch_summary = ctx.out_root / "summary"
+            batch_summary.mkdir(parents=True, exist_ok=True)
+            _write_combined(avg_rows, batch_summary / "combined_avg.csv", batch_summary / "combined_avg.md")
+            print(f"\n[compare] batch done ({len(video_paths)} videos).")
+            print(f"Wrote: {batch_summary / 'combined_avg.csv'}")
+            print(f"Wrote: {batch_summary / 'combined_avg.md'}")
+    elif len(seqs) == 1:
         # Single sequence — existing behavior.
         _run_pipelines_for_task(ctx, fast_vqa_eval_kw)
     else:

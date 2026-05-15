@@ -146,7 +146,7 @@ def load_video_frames_from_jpg_images(
     compute_device=torch.device("cuda"),
 ):
     """
-    Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
+    Load the video frames from a directory of JPEG/PNG files ("<frame_index>.jpg|.png" format).
 
     The frames are resized to image_size x image_size and are loaded to GPU if
     `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
@@ -157,19 +157,19 @@ def load_video_frames_from_jpg_images(
         jpg_folder = video_path
     else:
         raise NotImplementedError(
-            "Only JPEG frames are supported at this moment. For video files, you may use "
-            "ffmpeg (https://ffmpeg.org/) to extract frames into a folder of JPEG files, such as \n"
-            "```\n"
-            "ffmpeg -i <your_video>.mp4 -q:v 2 -start_number 0 <output_dir>/'%05d.jpg'\n"
-            "```\n"
-            "where `-q:v` generates high-quality JPEG frames and `-start_number 0` asks "
-            "ffmpeg to start the JPEG file from 00000.jpg."
-        )
+                "Only JPEG/PNG frames are supported at this moment. For video files, you may use "
+                "ffmpeg (https://ffmpeg.org/) to extract frames into a folder of JPEG files, such as \n"
+                "```\n"
+                "ffmpeg -i <your_video>.mp4 -q:v 2 -start_number 0 <output_dir>/'%05d.jpg'\n"
+                "```\n"
+                "where `-q:v` generates high-quality JPEG frames and `-start_number 0` asks "
+                "ffmpeg to start the JPEG file from 00000.jpg."
+            )
 
     frame_names = [
         p
         for p in os.listdir(jpg_folder)
-        if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
+        if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG", ".png", ".PNG"]
     ]
     frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
     num_frames = len(frame_names)

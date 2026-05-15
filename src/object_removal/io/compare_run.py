@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from object_removal.utils.video import mp4_to_frames
+
 # Re-exporting loaders from the compare CLI module would create import cycles.
 
 _PIPELINE_OPTION_KEYS = ("vggt4d", "sam3", "diffueraser", "propainter", "xmem", "vote_fusion")
@@ -146,12 +148,54 @@ def load_compare_yaml(path: Path) -> Dict[str, Any]:
     return dict(data)
 
 
+def _resolve_video_file(video_path: str, *, repo_root: Path) -> Path:
+    """Resolve a video path spec to an existing file.
+
+    Supports:
+      - Absolute path
+      - Path relative to repo_root
+      - Bare filename -> looks under data/videos/<filename>
+    """
+    p = Path(video_path)
+    if p.is_absolute():
+        if p.is_file():
+            return p
+        raise FileNotFoundError(f"Video not found: {p}")
+    # Try relative to repo_root first.
+    cand = (repo_root / p).resolve()
+    if cand.is_file():
+        return cand
+    # Try data/videos/ as default video dir.
+    cand = (repo_root / "data" / "videos" / p.name).resolve()
+    if cand.is_file():
+        return cand
+    raise FileNotFoundError(
+        f"Video not found: {video_path!r}. Tried: {repo_root / p}, {repo_root / 'data' / 'videos' / p.name}"
+    )
+
+
+def _resolve_video_frames(video_path: str, *, repo_root: Path, out_root: Path) -> Path:
+    """Extract frames from a video file into `out_root/frames/` and return the frames directory."""
+    video_file = _resolve_video_file(video_path, repo_root=repo_root)
+    frames_dir = out_root / "frames"
+    existing = sorted(
+        p for p in (frames_dir.glob("*.png") if frames_dir.is_dir() else [])
+        if p.is_file()
+    )
+    if existing:
+        return frames_dir
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    mp4_to_frames(video_file, frames_dir, ext=".png")
+    n = len(sorted(p for p in frames_dir.glob("*.png") if p.is_file()))
+    print(f"[compare] Extracted {n} frames from {video_file} -> {frames_dir}")
+    return frames_dir
+
+
 def default_out_root_for_task(task: str, *, repo_root: Path) -> Path:
     if task.startswith("davis:"):
         raw = task.split(":", 1)[1].strip()
         if not raw:
             raise ValueError(f"Invalid task (empty seq): {task!r}")
-        # Sanitize batch specs to a safe directory name.
         if raw.lower() == "all":
             name = "davis_batch"
         elif raw.startswith("[") and raw.endswith("]"):
@@ -159,7 +203,16 @@ def default_out_root_for_task(task: str, *, repo_root: Path) -> Path:
         else:
             name = raw
         return (repo_root / "outputs" / "compare" / name).resolve()
-    raise ValueError(f"Cannot derive default out_root for task: {task!r} (only davis:SEQ / davis:[...] / davis:all supported)")
+    if task.startswith("video:"):
+        raw = task.split(":", 1)[1].strip()
+        if not raw:
+            raise ValueError(f"Invalid task (empty video path): {task!r}")
+        name = Path(raw).stem
+        return (repo_root / "outputs" / name).resolve()
+    raise ValueError(
+        f"Cannot derive default out_root for task: {task!r} "
+        f"(supported: davis:SEQ / davis:[...] / davis:all / video:PATH)"
+    )
 
 
 def load_env_map(path: Path) -> Dict[str, Dict[str, str]]:
@@ -405,15 +458,23 @@ def resolve_compare_context(
         if not out_root_p.is_absolute():
             out_root_p = (repo_root / out_root_p).resolve()
 
-    if not task_res.startswith("davis:"):
-        raise ValueError("Only davis:SEQ / davis:[...] / davis:all is supported.")
+    if not (task_res.startswith("davis:") or task_res.startswith("video:")):
+        raise ValueError(
+            "Only davis:SEQ / davis:[...] / davis:all / video:PATH is supported. "
+            f"Got: {task_res!r}"
+        )
 
     raw_seq = task_res.split(":", 1)[1]
-    _is_batch = raw_seq.strip().lower() == "all" or (raw_seq.strip().startswith("[") and raw_seq.strip().endswith("]"))
+    _is_batch = (
+        task_res.startswith("davis:")
+        and (raw_seq.strip().lower() == "all" or (raw_seq.strip().startswith("[") and raw_seq.strip().endswith("]")))
+    )
 
-    if _is_batch:
-        # Batch task: resolve a placeholder single-sequence context.
-        # Per-sequence frames_dir/gt_mask_dir are resolved later in the batch loop.
+    if task_res.startswith("video:"):
+        # Wild video: extract frames, no GT masks.
+        frames_dir = _resolve_video_frames(raw_seq, repo_root=repo_root, out_root=out_root_p)
+        gt_mask_dir = out_root_p / "_no_gt"  # non-existent path to skip mask metrics
+    elif _is_batch:
         frames_dir = davis_root_p  # placeholder
         gt_mask_dir = davis_root_p
     else:
@@ -482,7 +543,6 @@ def expand_davis_tasks(task_spec: str, davis_root: Path) -> List[str]:
 
     rest = task_spec[len("davis:"):].strip()
 
-    # davis:[seq1,seq2,...]
     if rest.startswith("[") and rest.endswith("]"):
         inner = rest[1:-1].strip()
         if not inner:
@@ -503,10 +563,50 @@ def expand_davis_tasks(task_spec: str, davis_root: Path) -> List[str]:
     if not seqs:
         raise ValueError(f"No sequences resolved from task spec: {task_spec!r}")
 
-    # Verify each sequence directory exists
     for seq in seqs:
         jpeg_dir = davis_root / "JPEGImages" / "480p" / seq
         if not jpeg_dir.is_dir() or count_rgb_frames(jpeg_dir) == 0:
             raise FileNotFoundError(f"DAVIS frames not found for seq {seq!r}: {jpeg_dir}")
 
     return seqs
+
+
+def expand_video_tasks(task_spec: str, *, repo_root: Path) -> List[str]:
+    """Expand a video: task spec into a list of video file path strings.
+
+    Supported forms:
+      - ``video:<path>``  -> single video (returns ``[<path>]``)
+      - ``video:[p1,p2,...]`` -> explicit list
+      - ``video:all``  -> all *.mp4 files under data/videos/
+
+    Raises FileNotFoundError if a referenced video does not exist.
+    """
+    if not task_spec.startswith("video:"):
+        raise ValueError(f"Only video:PATH / video:all / video:[...] supported, got {task_spec!r}")
+
+    rest = task_spec[len("video:"):].strip()
+
+    if rest.startswith("[") and rest.endswith("]"):
+        inner = rest[1:-1].strip()
+        if not inner:
+            return []
+        paths = [s.strip() for s in inner.split(",") if s.strip()]
+    elif rest.lower() == "all":
+        video_dir = repo_root / "data" / "videos"
+        if not video_dir.is_dir():
+            raise FileNotFoundError(f"Video dir not found: {video_dir}")
+        paths = sorted(
+            p.name
+            for p in video_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        )
+    else:
+        paths = [rest]
+
+    if not paths:
+        raise ValueError(f"No videos resolved from task spec: {task_spec!r}")
+
+    for p in paths:
+        _resolve_video_file(p, repo_root=repo_root)
+
+    return paths
